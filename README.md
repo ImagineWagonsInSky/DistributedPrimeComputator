@@ -14,14 +14,18 @@ source venv/bin/activate
 ```bash
 pip3 install -r requirements.txt
 ```
+3. Generate gRPC code (run in both client/ and server/ directories):
+```bash
+python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. file_service.proto
+```
 
-3. Run server (in one terminal):
+4. Run server (in one terminal):
 ```bash
 cd server/
 python3 server.py
 ```
 
-4. Run client (in another terminal):
+5. Run client (in another terminal):
 ```bash
 cd client/
 python3 client.py
