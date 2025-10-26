@@ -20,7 +20,7 @@ def generate64bit(file_amount, number_amount):
         file.close()
 
 
-amount_files = 5
+amount_files = 1
 amount_nums  = 1000000
 start = time.time()
 generate64bit(amount_files, amount_nums)
