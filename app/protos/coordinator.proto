@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package app;
+
+service Coordinator {
+    // Workers asks for a task, coordinator sends one
+    rpc GetWork(google.protobuf.Empty) returns (WorkResponse) {};
+    // Workers submits a prime it found
+    rpc SubmitPrimeBatch(SubmitBatchRequest) returns (google.protobuf.Empty) {}; // from worker to cordinator
+}
+
+message WorkResponse {
+    // If true, the worker should exit.
+    bool no_more_work = 1;
+
+    string filename = 2;
+    uint32 start_line = 3;
+    uint32 num_lines = 4;
+}
+
+message SubmitBatchRequest {
+    repeated uint64 primes = 1;
+}
