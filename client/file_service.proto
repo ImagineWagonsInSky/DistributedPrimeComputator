@@ -6,6 +6,7 @@ service FileService {
   rpc CreateFile(CreateRequest) returns (CreateResponse);
   rpc OpenFile(OpenRequest) returns (OpenResponse);   // will send entire file
   rpc UploadFile(UploadRequest) returns (UploadResponse);   // this is from client to server
+  rpc TestAuth(TestAuthRequest) returns (TestAuthResponse);
 }
 
 message CreateRequest {
@@ -26,6 +27,7 @@ message OpenResponse {
   bool success = 1;
   bytes data = 2;
   string message = 3;
+  int64 server_timestamp = 4;
 }
 
 message UploadRequest {
@@ -38,3 +40,13 @@ message UploadResponse {
   string message = 2;
 }
 
+message TestAuthRequest {
+  string filename = 1;
+  int64 client_timestamp = 2; // client's cached timestamp
+}
+
+message TestAuthResponse {
+  bool valid = 1; // true if cache is still good
+  string message = 2;
+  int64 server_timestamp = 3;
+}

@@ -28,5 +28,11 @@ python3 server.py
 5. Run client (in another terminal):
 ```bash
 cd client/
-python3 client.py
+python3 client.py 
+```
+You also have the option of making a different cache for each "client" to see cache validation in action:
+```
+python3 client.py --cache-dir clientA_cache
+python3 client.py --cache-dir clientB_cache
+
 ```
