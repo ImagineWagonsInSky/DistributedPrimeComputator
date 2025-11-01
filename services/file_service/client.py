@@ -1,5 +1,5 @@
 import grpc
-import file_service_pb2, file_service_pb2_grpc
+from proto.generated.file_service import file_service_pb2, file_service_pb2_grpc
 import os
 import time
 
@@ -7,7 +7,7 @@ import argparse
 
 # Can add a different cache directory to test cache validation on independent clients
 parser = argparse.ArgumentParser()
-parser.add_argument("--cache-dir", default="client_cache")
+parser.add_argument("--cache-dir", default="services/file_service/client_cache")
 args = parser.parse_args()
 
 CACHE_DIR = args.cache_dir

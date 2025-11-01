@@ -1,10 +1,12 @@
 import grpc
-import coordinator_pb2, coordinator_pb2_grpc
-from client import client, file_service_pb2, file_service_pb2_grpc
+from proto.generated.coordinator import coordinator_pb2, coordinator_pb2_grpc
+from proto.generated.file_service import file_service_pb2, file_service_pb2_grpc
 from prime_testing import prime_testing
 import time
 
 import google.protobuf.empty_pb2
+
+from services.file_service import client
 
 class Worker():
     def __init__(self):
