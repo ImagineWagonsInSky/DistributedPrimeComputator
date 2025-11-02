@@ -7,6 +7,7 @@ service FileService {
   rpc OpenFile(OpenRequest) returns (OpenResponse);   // will send entire file
   rpc UploadFile(UploadRequest) returns (UploadResponse);   // this is from client to server
   rpc TestAuth(TestAuthRequest) returns (TestAuthResponse);
+  rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
 }
 
 message CreateRequest {
@@ -49,4 +50,18 @@ message TestAuthResponse {
   bool valid = 1; // true if cache is still good
   string message = 2;
   int64 server_timestamp = 3;
+}
+
+message FileTuple {
+  string filename = 1;
+  uint64 size = 2;
+}
+
+message ListFilesRequest {
+  uint32 offset = 1;
+  uint32 limit = 2;
+}
+
+message ListFilesResponse {
+  repeated FileTuple files = 1;
 }

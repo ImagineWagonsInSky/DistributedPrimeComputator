@@ -28,7 +28,6 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
         ts = file_timestamp(path)
         return file_service_pb2.OpenResponse(success=True, data=data, message="File sent", server_timestamp=ts)
 
-    # TODO: be made with TestAuth checksum stuff
     def UploadFile(self, request, context):
         path = os.path.join(DATA_DIR, request.filename)
         with open(path, "wb") as f:
@@ -44,6 +43,27 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
             return file_service_pb2.TestAuthResponse(valid=True, message="Cache Valid", server_timestamp=server_ts)
         else: 
             return file_service_pb2.TestAuthResponse(valid=False, message="Cache outdated", server_timestamp=server_ts)
+    
+    def ListFiles(self, request, context):
+        """
+        Returns repeated list of tuples:
+        (filename: string, size: uint64)
+        Optional offset and file limit
+        """
+        files = []
+        all_files = os.listdir(DATA_DIR)
+        start = request.offset
+        end = start + request.limit if request.limit > 0 else len(all_files)
+
+        for name in all_files[start:end]:
+            path = os.path.join(DATA_DIR, name)
+            if os.path.isfile(path):
+                files.append(file_service_pb2.FileTuple(
+                    filename=name,
+                    size=os.path.getsize(path)
+                ))
+
+        return file_service_pb2.ListFilesResponse(files=files)
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
