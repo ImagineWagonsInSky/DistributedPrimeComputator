@@ -93,5 +93,10 @@ def main():
     write_local(fname, b"new data1")
     close_file(stub, fname)
 
+    resp = stub.ListFiles(file_service_pb2.ListFilesRequest())
+    for f in resp.files:
+        print(f"{f.filename} ({f.size} bytes)")
+
+
 if __name__ == "__main__":
     main()

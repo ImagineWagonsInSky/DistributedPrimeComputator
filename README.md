@@ -25,7 +25,7 @@ cd server/
 python3 server.py
 ```
 
-5. Run client (in another terminal):
+5. Run client (in another terminal) - this has example usage for each RPC call:
 ```bash
 cd client/
 python3 client.py 
