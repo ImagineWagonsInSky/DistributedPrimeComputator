@@ -1,10 +1,10 @@
 import grpc
 from concurrent import futures
-import file_service_pb2, file_service_pb2_grpc
+from proto.generated.file_service import file_service_pb2, file_service_pb2_grpc
 import os
 import time
 
-DATA_DIR = "server_store"
+DATA_DIR = "services/file_service/server_store"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 def file_timestamp(path):

@@ -1,10 +1,12 @@
 import grpc
 import threading
-import coordinator_pb2, coordinator_pb2_grpc
+from proto.generated.coordinator import coordinator_pb2, coordinator_pb2_grpc
 import google.protobuf.empty_pb2
-from client import client, file_service_pb2, file_service_pb2_grpc
+from proto.generated.file_service import file_service_pb2, file_service_pb2_grpc
 from concurrent import futures
 from math import ceil
+
+from services.file_service import client
 
 class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
     OUTPUT_FILENAME = "primes.txt"
