@@ -51,7 +51,7 @@ class Worker():
         
         primes_found = []
         try:
-            local_file = client.open_file(self.filesystem_stub, task.filename) 
+            local_file, _ = client.open_or_validate(self.filesystem_stub, task.filename) 
         except grpc.RpcError as e:
                 print(f"gRPC Error when opening remote file: {e.details()}.")
 

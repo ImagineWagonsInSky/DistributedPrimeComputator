@@ -7,7 +7,7 @@ import argparse
 
 # Can add a different cache directory to test cache validation on independent clients
 parser = argparse.ArgumentParser()
-parser.add_argument("--cache-dir", default="services/file_service/client_cache")
+parser.add_argument("--cache-dir", default="services/coordinator/client1_cache")
 args = parser.parse_args()
 
 CACHE_DIR = args.cache_dir
@@ -55,12 +55,17 @@ def write_local(filename, new_data):
     """
     Simulating just a local write
     """
+    print(f"NEW DATA BEING WRITTEN: {new_data}")
     path = os.path.join(CACHE_DIR, filename)
+    print(f"Path: {path}")
     if not os.path.exists(path):
         print("File not cached locally")
         return
-    with open(path, "wb") as f:
-        f.write(new_data)
+    with open(path, "w") as f:
+        print("File has been cached locally")
+        f.write(str(new_data))
+        print("File cached locally")
+
     print(f"Local cache for {filename} updated locally")
 
 def close_file(stub, filename):
@@ -82,20 +87,21 @@ def close_file(stub, filename):
         f.write(str(new_resp.server_timestamp))
 
 def main():
-    channel = grpc.insecure_channel("localhost:50051")
-    stub = file_service_pb2_grpc.FileServiceStub(channel)
-    fname = "demo.txt"
+    # channel = grpc.insecure_channel("localhost:50051")
+    # stub = file_service_pb2_grpc.FileServiceStub(channel)
+    # fname = "demo.txt"
 
-    local_file, ts = open_or_validate(stub, fname)
-    with open(local_file, "rb") as f:
-        print("Local read:", f.read().decode())
+    # local_file, ts = open_or_validate(stub, fname)
+    # with open(local_file, "rb") as f:
+    #     print("Local read:", f.read().decode())
 
-    write_local(fname, b"new data1")
-    close_file(stub, fname)
+    # write_local(fname, b"new data1")
+    # close_file(stub, fname)
 
-    resp = stub.ListFiles(file_service_pb2.ListFilesRequest())
-    for f in resp.files:
-        print(f"{f.filename} ({f.size} bytes)")
+    # resp = stub.ListFiles(file_service_pb2.ListFilesRequest())
+    # for f in resp.files:
+    #     print(f"{f.filename} ({f.size} bytes)")
+    pass
 
 
 if __name__ == "__main__":

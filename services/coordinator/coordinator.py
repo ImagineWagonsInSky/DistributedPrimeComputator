@@ -5,12 +5,13 @@ import google.protobuf.empty_pb2
 from proto.generated.file_service import file_service_pb2, file_service_pb2_grpc
 from concurrent import futures
 from math import ceil
+import os
 
 from services.file_service import client
 
 class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
     OUTPUT_FILENAME = "primes.txt"
-    CHUNK_SIZE = 1000
+    CHUNK_SIZE = 10000
     
     def __init__(self, cache_dir):
         filesystem_channel = grpc.insecure_channel("localhost:50051")
@@ -18,12 +19,12 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
 
         # Initialize in-memory set to track all unique primes found so far.
         self.found_primes = set()
-        self.primes_lock = threading.lock()
+        self.primes_lock = threading.Lock()
 
         # Work queue with elements (filename, start_line, num_lines)
         self.work_queue = [] 
         self._populate_queue()
-        self.work_queue_lock = threading.lock()
+        self.work_queue_lock = threading.Lock()
 
         self.local_cache_dir = cache_dir
         print("Coordinator initialized")
@@ -32,13 +33,14 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         """
         Populate work queue with all files on fileserver seperatee into CHUNK_SIZE pieces
         """
-        # hardcoded for now
-        filename_list = [("input_dataset_001", 200000), ("input_dataset_002", 400000), ("input_dataset_003", 600000)]
         # BUT Fileserver RPC would return list of tuples (filename, file_size), or should it do less/more processing?
-        # filename_list = client.list_files(self.filesystem_stub)
-        for file_name, size in filename_list:
-            for i in range(ceil(size / self.CHUNK_SIZE)):
-                self.work_queue.append((file_name, i * self.CHUNK_SIZE, self.CHUNK_SIZE))
+        filename_list = self.filesystem_stub.ListFiles(file_service_pb2.ListFilesRequest())
+        for f in filename_list.files:
+            print(f.filename)
+            if not f.filename == "primes.txt":
+                print(f.filename)
+                for i in range(ceil(f.size / self.CHUNK_SIZE)):
+                    self.work_queue.append((f.filename, i * self.CHUNK_SIZE, self.CHUNK_SIZE))
 
     def GetWork(self, request, context):
         #Currently requests isn't used because it is empty. Would be useful in future for tracking who is processing what chunks?
@@ -62,8 +64,11 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
                 try:
                     # add all primes batch to output file
                     # unsure if this is the correct way to use the client methods
-                    local_file = client.open_file(self.filesystem_stub, self.OUTPUT_FILENAME)
-                    client.write_local(local_file, new_primes)
+                    local_path, _ = client.open_or_validate(self.filesystem_stub, self.OUTPUT_FILENAME)
+                    local_file = os.path.basename(local_path)
+                    print(f"HERE IS THE LOCAL FILE {local_file}")
+                    for prime in new_primes:
+                        client.write_local(local_file, prime)
                     client.close_file(self.filesystem_stub, self.OUTPUT_FILENAME)
                 
                 except grpc.RpcError as e:
