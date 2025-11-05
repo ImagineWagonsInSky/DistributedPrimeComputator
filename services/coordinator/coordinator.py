@@ -6,14 +6,23 @@ from proto.generated.file_service import file_service_pb2, file_service_pb2_grpc
 from concurrent import futures
 from math import ceil
 import os
+import argparse
 
 from services.file_service import client
 
+# Can add a different cache directory to test cache validation on independent clients
+parser = argparse.ArgumentParser()
+parser.add_argument("--cache-dir", default="services/coordinator/coordinator_cache")
+args = parser.parse_args()
+
+CACHE_DIR = args.cache_dir
+os.makedirs(CACHE_DIR, exist_ok=True)
+
 class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
-    OUTPUT_FILENAME = "primes.txt"
-    CHUNK_SIZE = 10000
+    OUTPUT_PATH = os.path.join(CACHE_DIR, "primes.txt")
+    CHUNK_SIZE = 1000
     
-    def __init__(self, cache_dir):
+    def __init__(self):
         filesystem_channel = grpc.insecure_channel("localhost:50051")
         self.filesystem_stub = file_service_pb2_grpc.FileServiceStub(filesystem_channel)
 
@@ -26,7 +35,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         self._populate_queue()
         self.work_queue_lock = threading.Lock()
 
-        self.local_cache_dir = cache_dir
+        self.local_cache_dir = CACHE_DIR
         print("Coordinator initialized")
     
     def _populate_queue(self):
@@ -60,16 +69,12 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
                     self.found_primes.add(prime)
 
             if new_primes:
-                print(f"Added new prime batch: {new_primes}")
                 try:
                     # add all primes batch to output file
                     # unsure if this is the correct way to use the client methods
-                    local_path, _ = client.open_or_validate(self.filesystem_stub, self.OUTPUT_FILENAME)
-                    local_file = os.path.basename(local_path)
-                    print(f"HERE IS THE LOCAL FILE {local_file}")
-                    for prime in new_primes:
-                        client.write_local(local_file, prime)
-                    client.close_file(self.filesystem_stub, self.OUTPUT_FILENAME)
+                    local_path, _ = client.open_or_validate(self.filesystem_stub, self.OUTPUT_PATH)
+                    client.write_primes_to_local(local_path,new_primes)                    
+                    client.close_file(self.filesystem_stub, self.OUTPUT_PATH)
                 
                 except grpc.RpcError as e:
                     print(f"gRPC error: {e.details}")
@@ -81,9 +86,10 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     # no clue what cache dir should be called
-    cache_dir="tmp/coordinator-cache"
+    # cache_dir="tmp/coordinator-cache"
+    # coordinator_pb2_grpc.add_CoordinatorServicer_to_server(CoordinatorServicer(cache_dir=cache_dir), server)
 
-    coordinator_pb2_grpc.add_CoordinatorServicer_to_server(CoordinatorServicer(cache_dir=cache_dir), server)
+    coordinator_pb2_grpc.add_CoordinatorServicer_to_server(CoordinatorServicer(), server)
     
     server.add_insecure_port("[::]:50052")
     print("Coordinator Server listening on port 50052...")

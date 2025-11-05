@@ -3,10 +3,19 @@ from proto.generated.coordinator import coordinator_pb2, coordinator_pb2_grpc
 from proto.generated.file_service import file_service_pb2, file_service_pb2_grpc
 from prime_testing import prime_testing
 import time
-
+import argparse
+import os
 import google.protobuf.empty_pb2
 
 from services.file_service import client
+
+# Can add a different cache directory to test cache validation on independent clients
+parser = argparse.ArgumentParser()
+parser.add_argument("--cache-dir", default="services/coordinator/client1_cache")
+args = parser.parse_args()
+
+CACHE_DIR = args.cache_dir
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 class Worker():
     def __init__(self):
@@ -17,7 +26,7 @@ class Worker():
         self.filesystem_stub = file_service_pb2_grpc.FileServiceStub(filesystem_channel)    
 
         self.current_task = None
-
+        self.local_cache_dir = CACHE_DIR
 
     def run(self):
         """The main processing loop for the worker."""
@@ -51,7 +60,8 @@ class Worker():
         
         primes_found = []
         try:
-            local_file, _ = client.open_or_validate(self.filesystem_stub, task.filename) 
+            local_path = os.path.join(self.local_cache_dir, task.filename)
+            local_file, _ = client.open_or_validate(self.filesystem_stub, local_path) 
         except grpc.RpcError as e:
                 print(f"gRPC Error when opening remote file: {e.details()}.")
 
@@ -78,7 +88,7 @@ class Worker():
         
         finally:
             try:
-                client.close_file(self.filesystem_stub, task.filename)
+                client.close_file(self.filesystem_stub, local_path)
             except grpc.RpcError as e:
                 print(f"gRPC error when trying to close file: {e.details()}")
 
