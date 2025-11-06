@@ -1,38 +1,80 @@
 # DistributedSystems-CS
 
-## Setup & Usage
+## Running with Docker Compose
 
-Assuming linux usage.
+### 1. Build and start the system
 
-1. Create and activate virtual environment:
+From the repository root, run:
+
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+docker compose up --build
 ```
 
-2. Install requirements:
+This command will:
+
+* Build the shared image from the `Dockerfile`.
+* Start:
+
+  * one `file_service` container,
+  * one `coordinator` container,
+  * one `worker` container.
+
+You can view logs with:
+
 ```bash
-pip3 install -r requirements.txt
-```
-3. Generate gRPC code (run in both client/ and server/ directories):
-```bash
-python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. file_service.proto
+docker compose logs -f
 ```
 
-4. Run server (in one terminal):
+---
+
+### 2. Scaling the workers
+
+You can simulate multiple workers by scaling the worker service:
+
 ```bash
-cd server/
-python3 server.py
+docker compose up --build --scale worker=5
 ```
 
-5. Run client (in another terminal) - this has example usage for each RPC call:
-```bash
-cd client/
-python3 client.py 
-```
-You also have the option of making a different cache for each "client" to see cache validation in action:
-```
-python3 client.py --cache-dir clientA_cache
-python3 client.py --cache-dir clientB_cache
+This will start five independent worker containers (named `worker_1`, `worker_2`, etc.),
+each connecting to the same coordinator and file service.
 
+---
+
+## Environment Configuration
+
+The containers communicate via a shared Docker network.
+Each component reads its configuration from environment variables (set in `docker-compose.yml`):
+
+| Variable            | Default        | Description                            |
+| ------------------- | -------------- | -------------------------------------- |
+| `FILE_SERVICE_HOST` | `file_service` | Hostname of the file service container |
+| `FILE_SERVICE_PORT` | `50051`        | File service gRPC port                 |
+| `COORDINATOR_HOST`  | `coordinator`  | Hostname of the coordinator container  |
+| `COORDINATOR_PORT`  | `50052`        | Coordinator gRPC port                  |
+
+In local (non-Docker) runs, these default to `localhost` and can be overridden with `--env`.
+
+---
+
+## Code Overview
+
+* `services/file_service/server.py`: gRPC file server implementation.
+* `services/coordinator/coordinator.py`: Coordinator gRPC service.
+* `services/coordinator/worker.py`: Worker logic connecting to coordinator and file service.
+* `proto/generated/`: Generated protobuf and gRPC Python files.
+
+All processes are started using Python’s module syntax (e.g. `python3 -m services.coordinator.coordinator`).
+
+
+---
+
+## Local Development
+
+If you’re actively editing the source code, you can mount your local directory into the containers by adding this under each service in `docker-compose.yml`:
+
+```yaml
+volumes:
+  - .:/app
 ```
+
+Then code changes will be reflected without rebuilding the image.

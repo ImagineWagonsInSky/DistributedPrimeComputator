@@ -3,16 +3,6 @@ from proto.generated.file_service import file_service_pb2, file_service_pb2_grpc
 import os
 import time
 
-import argparse
-
-# Can add a different cache directory to test cache validation on independent clients
-parser = argparse.ArgumentParser()
-parser.add_argument("--cache-dir", default="services/coordinator/client1_cache")
-args = parser.parse_args()
-
-CACHE_DIR = args.cache_dir
-os.makedirs(CACHE_DIR, exist_ok=True)
-
 
 def validate(filename, stub, cached_ts):
     print(f"Found cached copy of '{filename}' with ts={cached_ts}, validating...")
@@ -24,11 +14,11 @@ def validate(filename, stub, cached_ts):
         print("Cache outdated, refetching from server.")
         return False
 
-def open_or_validate(stub, filename):
+def open_or_validate(stub, local_path):
     """
     If cached copy exists, validate with server before reuse.
     """
-    local_path = os.path.join(CACHE_DIR, filename)
+    filename = os.path.basename(local_path)
     ts_file = local_path + ".ts"
 
     if os.path.exists(local_path) and os.path.exists(ts_file):
@@ -51,28 +41,41 @@ def open_or_validate(stub, filename):
     print(f"File {filename} fetched and saved locally in cache with ts={resp.server_timestamp}.")
     return local_path, resp.server_timestamp
 
-def write_local(filename, new_data):
+def write_local(path, new_data):
     """
     Simulating just a local write
     """
-    print(f"NEW DATA BEING WRITTEN: {new_data}")
-    path = os.path.join(CACHE_DIR, filename)
-    print(f"Path: {path}")
+    filename = os.path.basename(path)
+
     if not os.path.exists(path):
         print("File not cached locally")
         return
+    
     with open(path, "w") as f:
-        print("File has been cached locally")
-        f.write(str(new_data))
-        print("File cached locally")
+        f.write(new_data)
 
     print(f"Local cache for {filename} updated locally")
 
-def close_file(stub, filename):
+def write_primes_to_local(path, primes):
+    """
+    A local write from list of primes
+    """
+    filename = os.path.basename(path)
+    if not os.path.exists(path):
+        print("File not cached locally")
+        return
+    
+    with open(path, "a") as f:
+        for prime in primes:
+            f.write(f"{prime}\n")
+
+    print(f"Local cache for {filename} updated locally")
+
+def close_file(stub, path):
     """
     Upload cached file and update timestamp.
     """
-    path = os.path.join(CACHE_DIR, filename)
+    filename = os.path.basename(path)
     ts_file = path + ".ts"
     if not os.path.exists(path):
         print("No local file in cache to close")
@@ -85,24 +88,3 @@ def close_file(stub, filename):
     new_resp = stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=0))
     with open(ts_file, "w") as f:
         f.write(str(new_resp.server_timestamp))
-
-def main():
-    # channel = grpc.insecure_channel("localhost:50051")
-    # stub = file_service_pb2_grpc.FileServiceStub(channel)
-    # fname = "demo.txt"
-
-    # local_file, ts = open_or_validate(stub, fname)
-    # with open(local_file, "rb") as f:
-    #     print("Local read:", f.read().decode())
-
-    # write_local(fname, b"new data1")
-    # close_file(stub, fname)
-
-    # resp = stub.ListFiles(file_service_pb2.ListFilesRequest())
-    # for f in resp.files:
-    #     print(f"{f.filename} ({f.size} bytes)")
-    pass
-
-
-if __name__ == "__main__":
-    main()

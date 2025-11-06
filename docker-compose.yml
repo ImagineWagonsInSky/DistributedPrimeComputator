@@ -1,0 +1,58 @@
+services:
+  file_service:
+    build: .
+    container_name: file_service
+    command: ["python3", "-m", "services.file_service.server"]
+    environment:
+      - ROLE=file_service
+      - RPC_HOST=0.0.0.0
+      - RPC_PORT=50051
+    ports:
+      - "50051:50051"
+    networks:
+      - dist_net
+    restart: on-failure
+  
+  coordinator:
+    build: .
+    container_name: coordinator
+    command: ["python3", "-m", "services.coordinator.coordinator"]
+    environment:
+      - ROLE=coordinator
+      - COORDINATOR_HOST=0.0.0.0
+      - COORDINATOR_PORT=50052
+      - FILE_SERVICE_HOST=file_service
+      - FILE_SERVICE_PORT=50051
+    depends_on:
+      - file_service
+    ports:
+      - "50052:50052"  # expose if you want to test from host
+    networks:
+      - dist_net
+    restart: on-failure
+  
+  worker:
+    build: .
+    command: ["python3", "-m", "services.coordinator.worker"]
+    environment:
+      - ROLE=worker
+      - COORDINATOR_HOST=coordinator
+      - COORDINATOR_PORT=50052
+      - FILE_SERVICE_HOST=file_service
+      - FILE_SERVICE_PORT=50051
+    depends_on:
+      - coordinator
+      - file_service
+    networks:
+      - dist_net
+    restart: on-failure
+    # optionally adjust resources
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '0.50'
+    #       memory: 256M
+
+networks:
+  dist_net:
+    driver: bridge
