@@ -23,7 +23,15 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
     CHUNK_SIZE = 1000
     
     def __init__(self):
-        filesystem_channel = grpc.insecure_channel("localhost:50051", options=[('grpc.max_send_message_length', -1),('grpc.max_receive_message_length', -1),])
+        filesystem_host = os.getenv("FILE_SERVICE_HOST", "localhost")
+        filesystem_port = os.getenv("FILE_SERVICE_PORT", "50051")
+
+        filesystem_channel = grpc.insecure_channel(
+            f"{filesystem_host}:{filesystem_port}", 
+            options=[
+                ('grpc.max_send_message_length', -1),
+                ('grpc.max_receive_message_length', -1),
+            ])
         self.filesystem_stub = file_service_pb2_grpc.FileServiceStub(filesystem_channel)
 
         # Initialize in-memory set to track all unique primes found so far.
@@ -91,7 +99,7 @@ def serve():
 
     coordinator_pb2_grpc.add_CoordinatorServicer_to_server(CoordinatorServicer(), server)
     
-    server.add_insecure_port("[::]:50052")
+    server.add_insecure_port("0.0.0.0:50052")
     print("Coordinator Server listening on port 50052...")
     server.start()
     server.wait_for_termination()
