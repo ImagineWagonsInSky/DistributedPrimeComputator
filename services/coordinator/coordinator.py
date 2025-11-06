@@ -23,7 +23,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
     CHUNK_SIZE = 1000
     
     def __init__(self):
-        filesystem_channel = grpc.insecure_channel("localhost:50051")
+        filesystem_channel = grpc.insecure_channel("localhost:50051", options=[('grpc.max_send_message_length', -1),('grpc.max_receive_message_length', -1),])
         self.filesystem_stub = file_service_pb2_grpc.FileServiceStub(filesystem_channel)
 
         # Initialize in-memory set to track all unique primes found so far.

@@ -66,7 +66,7 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
         return file_service_pb2.ListFilesResponse(files=files)
 
 def serve():
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4), options=[('grpc.max_send_message_length', -1),('grpc.max_receive_message_length', -1),])
     file_service_pb2_grpc.add_FileServiceServicer_to_server(FileServiceServicer(), server)
     server.add_insecure_port("[::]:50051")
     print("Server listening with TestAuth support on port 50051...")

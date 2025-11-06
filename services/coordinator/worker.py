@@ -22,7 +22,7 @@ class Worker():
         coordinator_channel = grpc.insecure_channel('localhost:50052')
         self.coordinator_stub = coordinator_pb2_grpc.CoordinatorStub(coordinator_channel)
 
-        filesystem_channel = grpc.insecure_channel("localhost:50051")
+        filesystem_channel = grpc.insecure_channel("localhost:50051", options=[('grpc.max_send_message_length', -1),('grpc.max_receive_message_length', -1),])
         self.filesystem_stub = file_service_pb2_grpc.FileServiceStub(filesystem_channel)    
 
         self.current_task = None

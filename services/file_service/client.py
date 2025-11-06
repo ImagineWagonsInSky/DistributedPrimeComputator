@@ -88,24 +88,3 @@ def close_file(stub, path):
     new_resp = stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=0))
     with open(ts_file, "w") as f:
         f.write(str(new_resp.server_timestamp))
-
-def main():
-    # channel = grpc.insecure_channel("localhost:50051")
-    # stub = file_service_pb2_grpc.FileServiceStub(channel)
-    # fname = "demo.txt"
-
-    # local_file, ts = open_or_validate(stub, fname)
-    # with open(local_file, "rb") as f:
-    #     print("Local read:", f.read().decode())
-
-    # write_local(fname, b"new data1")
-    # close_file(stub, fname)
-
-    # resp = stub.ListFiles(file_service_pb2.ListFilesRequest())
-    # for f in resp.files:
-    #     print(f"{f.filename} ({f.size} bytes)")
-    pass
-
-
-if __name__ == "__main__":
-    main()
