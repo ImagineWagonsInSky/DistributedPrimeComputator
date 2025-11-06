@@ -10,7 +10,6 @@ import argparse
 
 from services.file_service import client
 
-# Can add a different cache directory to test cache validation on independent clients
 parser = argparse.ArgumentParser()
 parser.add_argument("--cache-dir", default="services/coordinator/coordinator_cache")
 args = parser.parse_args()
@@ -30,35 +29,62 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         self.found_primes = set()
         self.primes_lock = threading.Lock()
 
-        # Work queue with elements (filename, start_line, num_lines)
-        self.work_queue = [] 
-        self._populate_queue()
-        self.work_queue_lock = threading.Lock()
+        # A dictionary of lists that holds a separate queue of tasks for each file.
+        self.task_queues = {}
+        # A dictionary that tracks the last file assigned to each worker.
+        self.worker_affinity = {}
+        self._populate_queues()
+        self.task_queues_lock = threading.Lock()
 
         self.local_cache_dir = CACHE_DIR
         print("Coordinator initialized")
     
-    def _populate_queue(self):
+    def _populate_queues(self):
         """
         Populate work queue with all files on fileserver seperatee into CHUNK_SIZE pieces
         """
-        # BUT Fileserver RPC would return list of tuples (filename, file_size), or should it do less/more processing?
+        self.task_queues = {}
+        
         filename_list = self.filesystem_stub.ListFiles(file_service_pb2.ListFilesRequest())
         for f in filename_list.files:
-            print(f.filename)
             if not f.filename == "primes.txt":
-                print(f.filename)
+                self.task_queues[f.filename] = []
+
                 for i in range(ceil(f.size / self.CHUNK_SIZE)):
-                    self.work_queue.append((f.filename, i * self.CHUNK_SIZE, self.CHUNK_SIZE))
+                    task = (f.filename, i * self.CHUNK_SIZE, self.CHUNK_SIZE)
+                    self.task_queues[f.filename].append(task)
 
     def GetWork(self, request, context):
-        #Currently requests isn't used because it is empty. Would be useful in future for tracking who is processing what chunks?
-        with self.work_queue_lock:
-            if not self.work_queue:
-                return coordinator_pb2.WorkResponse(no_more_work=True, filename="", start_line=0, num_lines=0)
+        with self.task_queues_lock:
             
-            filename, start_line, num_lines = self.work_queue.pop(0)
-        return coordinator_pb2.WorkResponse(no_more_work=False, filename=filename, start_line=start_line, num_lines=num_lines)
+            # Use worker_id to fetch the preferred input file
+            worker_id = request.worker_id
+            preferred_file = self.worker_affinity.get(worker_id)
+
+            if preferred_file and self.task_queues.get(preferred_file):
+                filename, start_line, num_lines = self.task_queues[preferred_file].pop(0)    
+
+                # If this was the last task for the file, clear the queue
+                if not self.task_queues[preferred_file]:
+                    del self.task_queues[preferred_file]
+
+                return coordinator_pb2.WorkResponse(no_more_work=False, filename=filename, start_line=start_line, num_lines=num_lines)
+            
+            # Cache miss, no preferred task so find a new file with remaining tasks
+            for f, task_list in self.task_queues.items():
+                if task_list:
+
+                    filename, start_line, num_lines = task_list.pop(0)
+                                        
+                    # If that was the last task for the file, clear the queue
+                    if not task_list:
+                        del self.task_queues[f]
+
+                    self.worker_affinity[worker_id] = filename
+
+                    return coordinator_pb2.WorkResponse(no_more_work=False, filename=filename, start_line=start_line, num_lines=num_lines)
+                        
+            return coordinator_pb2.WorkResponse(no_more_work=True, filename="", start_line=0, num_lines=0)
 
     def SubmitPrimeBatch(self, request, context):
         with self.primes_lock:

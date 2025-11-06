@@ -6,7 +6,7 @@ package app;
 
 service Coordinator {
     // Workers asks for a task, coordinator sends one
-    rpc GetWork(google.protobuf.Empty) returns (WorkResponse) {};
+    rpc GetWork(GetWorkRequest) returns (WorkResponse) {};
     // Workers submits a prime it found
     rpc SubmitPrimeBatch(SubmitBatchRequest) returns (google.protobuf.Empty) {}; // from worker to cordinator
 }
@@ -22,4 +22,8 @@ message WorkResponse {
 
 message SubmitBatchRequest {
     repeated uint64 primes = 1;
+}
+
+message GetWorkRequest {
+    string worker_id = 1;
 }

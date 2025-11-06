@@ -6,10 +6,9 @@ import time
 import argparse
 import os
 import google.protobuf.empty_pb2
-
+import uuid
 from services.file_service import client
 
-# Can add a different cache directory to test cache validation on independent clients
 parser = argparse.ArgumentParser()
 parser.add_argument("--cache-dir", default="services/coordinator/client1_cache")
 args = parser.parse_args()
@@ -19,6 +18,9 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 class Worker():
     def __init__(self):
+        self.worker_id = str(uuid.uuid4())
+        print(f"Worker starting up with ID: {self.worker_id}")
+
         coordinator_channel = grpc.insecure_channel('localhost:50052')
         self.coordinator_stub = coordinator_pb2_grpc.CoordinatorStub(coordinator_channel)
 
@@ -30,10 +32,10 @@ class Worker():
 
     def run(self):
         """The main processing loop for the worker."""
-        print("Worker starting up...")
         while True:
             try:
-                work_reponse = self.coordinator_stub.GetWork(google.protobuf.empty_pb2.Empty())
+                work_request = coordinator_pb2.GetWorkRequest(worker_id = self.worker_id)
+                work_reponse = self.coordinator_stub.GetWork(work_request)
 
                 if work_reponse.no_more_work:
                     print("No more chunks. Worker exiting.")
