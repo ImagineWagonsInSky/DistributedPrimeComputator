@@ -8,22 +8,38 @@ service Coordinator {
     // Workers asks for a task, coordinator sends one
     rpc GetWork(GetWorkRequest) returns (WorkResponse) {};
     // Workers submits a prime it found
-    rpc SubmitPrimeBatch(SubmitBatchRequest) returns (google.protobuf.Empty) {}; // from worker to cordinator
+    rpc SubmitPrimeBatch(SubmitBatchRequest) returns (SubmitBatchResponse) {}; // from worker to cordinator
+    // Worker calls this to send its saved state
+    rpc SubmitSnapshotChunk(SnapshotChunk) returns (google.protobuf.Empty) {};
 }
 
 message WorkResponse {
     // If true, the worker should exit.
     bool no_more_work = 1;
-
-    string filename = 2;
-    uint32 start_line = 3;
-    uint32 num_lines = 4;
+    string task_id = 2;
+    string filename = 3;
+    uint32 start_line = 4;
+    uint32 num_lines = 5;
+    string snapshot_id = 6;
 }
 
 message SubmitBatchRequest {
     repeated uint64 primes = 1;
+    string worker_id = 2;
+    string task_id = 3;
+}
+
+message SubmitBatchResponse {
+    string snapshot_id = 1;
 }
 
 message GetWorkRequest {
     string worker_id = 1;
+}
+
+message SnapshotChunk {
+    string snapshot_id = 1;
+    string worker_id = 2;
+    // (current task's pickle file) 
+    bytes process_state = 3;
 }
