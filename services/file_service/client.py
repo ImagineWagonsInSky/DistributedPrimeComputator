@@ -41,18 +41,14 @@ def open_or_validate(stub, local_path):
     print(f"File {filename} fetched and saved locally in cache with ts={resp.server_timestamp}.")
     return local_path, resp.server_timestamp
 
-def write_local(path, new_data):
+def write_bytes_to_local(path, data_bytes):
     """
-    Simulating just a local write
+    Simulating a local write, writes raw bytes to the local cache in with
+    overwrite mode, creating a file if it doesn't exist.
     """
     filename = os.path.basename(path)
-
-    if not os.path.exists(path):
-        print("File not cached locally")
-        return
-    
-    with open(path, "w") as f:
-        f.write(new_data)
+    with open(path, "wb") as f:
+        f.write(data_bytes)
 
     print(f"Local cache for {filename} updated locally")
 
