@@ -11,6 +11,21 @@ def file_timestamp(path):
     return int(os.path.getmtime(path))
 
 class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
+    def __init__(self):
+        self._cleanup_temp_files()  # Cleanup temp files on startup
+
+    def _cleanup_temp_files(self):
+        """Remove any .tmp files left from crashed uploads"""
+        for filename in os.listdir(DATA_DIR):
+            if filename.endswith('.tmp'):
+                tmp_path = os.path.join(DATA_DIR, filename)
+                try:
+                    os.remove(tmp_path)
+                    print(f"[startup] Cleaned up temp file: {filename}")
+                except OSError:
+                    pass
+
+
     def CreateFile(self, request, context):
         path = os.path.join(DATA_DIR, request.filename)
         if os.path.exists(path):
@@ -27,12 +42,55 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
             data = f.read()
         ts = file_timestamp(path)
         return file_service_pb2.OpenResponse(success=True, data=data, message="File sent", server_timestamp=ts)
-
+    '''
     def UploadFile(self, request, context):
         path = os.path.join(DATA_DIR, request.filename)
         with open(path, "wb") as f:
             f.write(request.data)
-        return file_service_pb2.UploadResponse(success=True, message="File uploaded succesfully")
+        return file_service_pb2.UploadResponse(success=True, message="File uploaded successfully")
+    '''
+
+    def UploadFile(self, request, context):
+      filename = request.filename
+      data = request.data
+
+      # ATOMIC WRITE PATTERN
+      # Write to temp file first, then atomically rename to avoid partial files
+      file_path = os.path.join(DATA_DIR, filename)
+      tmp_path = file_path + ".tmp"
+
+      try:
+          # Write to temp file first
+          with open(tmp_path, "wb") as f:
+              f.write(data)
+
+          # Sync to disk (ensures data is persisted before rename)
+          with open(tmp_path, "rb") as f:
+              os.fsync(f.fileno())
+
+          # Atomic rename (either succeeds completely or not at all)
+          os.replace(tmp_path, file_path)
+
+          print(f"[UploadFile] Successfully uploaded {filename}")
+          return file_service_pb2.UploadResponse(
+              success=True,
+              message=f"File {filename} uploaded successfully"
+          )
+
+      except Exception as e:
+          # Clean up temp file on error
+          if os.path.exists(tmp_path):
+              try:
+                  os.remove(tmp_path)
+              except OSError:
+                  pass
+
+          print(f"[UploadFile] Error: {e}")
+          return file_service_pb2.UploadResponse(
+              success=False,
+              message=f"Upload failed: {str(e)}"
+          )
+
     
     def TestAuth(self, request, context):
         path = os.path.join(DATA_DIR, request.filename)
