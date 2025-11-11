@@ -18,6 +18,10 @@ service FileService {
 
   rpc CleanupTemp(CleanupTempRequest) returns (CleanupTempResponse);
   rpc CommitFile(CommitRequest) returns (CommitResponse);
+
+  //Subdivision files creation and replication
+  rpc RequestSubdivisions(RequestDivision) returns (RequestDivisionResponse);
+  rpc ReplicateSubdivisions(ReplicateDivision) returns (ReplicateDivisionResponse);
 }
 
 
@@ -124,4 +128,20 @@ message CommitRequest {
 message CommitResponse {
   bool success = 1;
   string message = 2;
+}
+
+message RequestDivision {
+    int subdivision_size = 1;
+}
+
+message RequestDivisionResponse {
+    bool success = 1;
+}
+
+message ReplicateDivision {
+    int subdivision_size = 1;
+}
+
+message ReplicateDivisionResponse {
+    bool success = 1;
 }

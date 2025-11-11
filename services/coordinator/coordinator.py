@@ -73,6 +73,18 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         Populate work queue with all files on fileserver seperatee into CHUNK_SIZE pieces
         """
         self.task_queues = {}
+        filename_list = self.filesystem_stub.ListFiles(file_service_pb2.ListFilesRequest())
+
+
+        #NOT SURE WHAT TO DO WITH THIS PART
+        if (self.check_subdivision_need(filename_list)):
+            # Wait for subdivisions to get created, not sure how to do that yet
+            filename_list = self.filesystem_stub.ListFiles(
+                file_service_pb2.ListFilesRequest())  # Supposed to be a list of subdivisions files instead of a normal list of files
+        else:
+            # If the files have reasonable size
+            filename_list = self.filesystem_stub.ListFiles(file_service_pb2.ListFilesRequest())
+
         task_counter = 0
         
         filename_list = self.filesystem_stub.ListFiles(file_service_pb2.ListFilesRequest())
@@ -323,6 +335,24 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         except grpc.RpcError as e:
             print(f"Failed to load snapshot: {e.details()}.")
             return False
+
+    def request_file_division(self, subdivision_size):
+        return coordinator_pb2.RequestDivision(subdivision_size=subdivision_size)
+
+    def check_subdivision_need(self, file_list, worker_count):
+        maximum_size = self.CHUNK_SIZE * 1000
+        optimal_size = self.CHUNK_SIZE * 100
+        if(len(file_list) < worker_count):
+            self.request_file_division(optimal_size)
+            return True
+        for f in file_list:
+            if f.size > maximum_size:
+                self.request_file_division(optimal_size)
+                return True
+        return False
+
+    def recover_worker_chunks(self):
+        return None
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))

@@ -54,6 +54,9 @@ class Worker():
         self.last_snapshot_id = None
         print(f"Worker starting up with ID: {self.worker_id}")
 
+        # --- PRESERVING CHUNKS ---
+        self.preserved_chunks = {}
+
     def run(self):
         """
         The main processing loop for the worker.
@@ -129,6 +132,7 @@ class Worker():
             except grpc.RpcError as e:
                 print(f"gRPC error when trying to close file: {e.details()}")
 
+        self.preserved_chunks.update({"Task" : task, "preserved_primes" : primes_found})
         return primes_found
 
     def _handle_snapshot_marker(self, snapshot_id):
@@ -167,6 +171,25 @@ class Worker():
                 print(f"Submitted snapshot chunk for {snapshot_id}")
             except grpc.RpcError as e:
                 print(f"Error when submitting snapshot chunk: {e.details()}")
+
+            self.preserved_chunks.clear()
+
+    def RecoverPreservedChunks(self):
+        for i in self.preserved_chunks:
+            submit_req = coordinator_pb2.SubmitBatchRequest(
+                primes=i["preserved_primes"],
+                task_id=i["Task"].task_id,
+                worker_id=self.worker_id
+            )
+            submit_response = self.coordinator_stub.SubmitPrimeBatch(submit_req)
+
+            # Handle potential snapshot marker
+            self._handle_snapshot_marker(submit_response.snapshot_id)
+
+        return None
+
+    def HeartbeatResponse(self):
+        return None
 
 if __name__ == "__main__":
     worker = Worker()
