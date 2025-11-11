@@ -1,7 +1,5 @@
 # DistributedSystems-CS
 
-## Running with Docker Compose
-
 ### 1. Build and start the system
 
 From the repository root, run:
@@ -15,9 +13,9 @@ This command will:
 * Build the shared image from the `Dockerfile`.
 * Start:
 
-  * one `file_service` container,
+  * four `file_service_*` containers,
   * one `coordinator` container,
-  * one `worker` container.
+  * one `worker` container - scalable to more.
 
 You can view logs with:
 
@@ -47,8 +45,8 @@ Each component reads its configuration from environment variables (set in `docke
 
 | Variable            | Default        | Description                            |
 | ------------------- | -------------- | -------------------------------------- |
-| `FILE_SERVICE_HOST` | `file_service` | Hostname of the file service container |
-| `FILE_SERVICE_PORT` | `50051`        | File service gRPC port                 |
+| `FILE_SERVICE_HOST` | `file_service` | Hostname of the main file service container |
+| `FILE_SERVICE_PORT` | `50051`        | It's default port               |
 | `COORDINATOR_HOST`  | `coordinator`  | Hostname of the coordinator container  |
 | `COORDINATOR_PORT`  | `50052`        | Coordinator gRPC port                  |
 

@@ -200,24 +200,136 @@ def write_primes_to_local(path, primes):
 
     print(f"Local cache for {filename} updated locally")
 
+def _make_stub(hostport, timeout_connect=0.8):
+    ch = grpc.insecure_channel(hostport, options=[
+        ("grpc.max_send_message_length", -1),
+        ("grpc.max_receive_message_length", -1),
+    ])
+    try:
+        grpc.channel_ready_future(ch).result(timeout=timeout_connect)
+        return file_service_pb2_grpc.FileServiceStub(ch)
+    except Exception:
+        return None
 
-def close_file(stub, path):
+def close_file(stub, path, peers_env_key="FILE_SERVICE_PEERS", max_retries=2):
     """
-    Upload cached file and update timestamp.
+    Upload cached file and update timestamp, following leader redirects when necessary.
+
+    - First tries the provided stub (fast path).
+    - If server replies NOT_LEADER and includes leader_host, retries against that host.
+    - If no leader hint, falls back to peers from env (if set).
     """
     filename = os.path.basename(path)
     ts_file = path + ".ts"
     if not os.path.exists(path):
         print("No local file in cache to close")
         return
+
     with open(path, "rb") as f:
         data = f.read()
-    resp = stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
-    print(f"Upload result: {resp.message}")
-    # Fetch new server timestamp after upload
-    new_resp = stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=0))
-    with open(ts_file, "w") as f:
-        f.write(str(new_resp.server_timestamp))
+
+    # Attempt 1: use provided stub (likely constructed from FILE_SERVICE_HOST/FILE_SERVICE_PORT)
+    try:
+        resp = stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
+    except grpc.RpcError as e:
+        print(f"Upload RPC error on initial stub: {e}. Will attempt discovery.")
+        resp = None
+
+    # If we have a response and it's successful, finish up
+    if resp and getattr(resp, "success", False):
+        print(f"Upload result: {resp.message}")
+        # refresh timestamp
+        new_resp = stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=0))
+        with open(ts_file, "w") as f:
+            f.write(str(new_resp.server_timestamp))
+        return
+
+    # If follower responded with NOT_LEADER hint, follow it
+    leader_hint = None
+    if resp:
+        # server sets message to "NOT_LEADER" and leader_host field in your server code
+        if getattr(resp, "message", "") and "NOT_LEADER" in str(resp.message):
+            leader_hint = getattr(resp, "leader_host", None)
+
+    if leader_hint:
+        print(f"Redirected to leader {leader_hint}, retrying upload there.")
+        leader_stub = _make_stub(leader_hint)
+        if leader_stub:
+            try:
+                resp2 = leader_stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
+                if getattr(resp2, "success", False):
+                    # print(f"Upload result (leader): {resp2.message}")
+                    new_resp = leader_stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=0))
+                    with open(ts_file, "w") as f:
+                        f.write(str(new_resp.server_timestamp))
+                    return
+            except grpc.RpcError as e:
+                print(f"Upload RPC to hinted leader failed: {e}")
+
+    # Fallback: iterate bootstrap peers from env (if provided) to find leader
+    peers_str = os.environ.get(peers_env_key, "")
+    peers = [p for p in peers_str.split(",") if p]
+    tried = set()
+    for peer in peers:
+        if peer in tried:
+            continue
+        tried.add(peer)
+        # print(f"Trying peer {peer} as potential leader...")
+        peer_stub = _make_stub(peer)
+        if not peer_stub:
+            continue
+        try:
+            resp3 = peer_stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
+        except grpc.RpcError as e:
+            # print(f"Upload RPC to peer {peer} failed: {e}")
+            continue
+
+        if getattr(resp3, "success", False):
+            # print(f"Upload succeeded on peer {peer} (leader).")
+            new_resp = peer_stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=0))
+            with open(ts_file, "w") as f:
+                f.write(str(new_resp.server_timestamp))
+            return
+        else:
+            # If peer returned NOT_LEADER with hint, follow it
+            if getattr(resp3, "message", "") and "NOT_LEADER" in str(resp3.message):
+                hint = getattr(resp3, "leader_host", None)
+                if hint and hint not in tried:
+                    # print(f"Peer {peer} redirected us to {hint}, trying that next.")
+                    tried.add(hint)
+                    hint_stub = _make_stub(hint)
+                    if hint_stub:
+                        try:
+                            resp4 = hint_stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
+                            if getattr(resp4, "success", False):
+                                # print(f"Upload succeeded on hinted leader {hint}.")
+                                new_resp = hint_stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=0))
+                                with open(ts_file, "w") as f:
+                                    f.write(str(new_resp.server_timestamp))
+                                return
+                        except grpc.RpcError as e:
+                            print(f"Upload RPC to hinted leader {hint} failed: {e}")
+    # If we get here, upload failed on all attempts
+    print("Failed to upload file to leader after trying hints and peers.")
+
+
+# def close_file(stub, path):
+#     """
+#     Upload cached file and update timestamp.
+#     """
+#     filename = os.path.basename(path)
+#     ts_file = path + ".ts"
+#     if not os.path.exists(path):
+#         print("No local file in cache to close")
+#         return
+#     with open(path, "rb") as f:
+#         data = f.read()
+#     resp = stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
+#     print(f"Upload result: {resp.message}")
+#     # Fetch new server timestamp after upload
+#     new_resp = stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=0))
+#     with open(ts_file, "w") as f:
+#         f.write(str(new_resp.server_timestamp))
 '''
 
 def close_file(stub, path):

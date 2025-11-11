@@ -1,18 +1,72 @@
 services:
-  file_service:
+  file_service_1:
     build: .
-    container_name: file_service
+    container_name: file_service_1
     command: ["python3", "-m", "services.file_service.server"]
     environment:
       - ROLE=file_service
       - RPC_HOST=0.0.0.0
       - RPC_PORT=50051
+      - SERVER_ID=server-1
+      - IS_LEADER=true
+      - PEERS=file_service_2:50054,file_service_3:50053,file_service_4:50055
     ports:
       - "50051:50051"
     networks:
       - dist_net
     restart: on-failure
   
+  file_service_2:
+    build: .
+    container_name: file_service_2
+    command: ["python3", "-m", "services.file_service.server"]
+    environment:
+      - ROLE=file_service
+      - SERVER_ID=server-2
+      - IS_LEADER=false
+      - RPC_HOST=0.0.0.0
+      - RPC_PORT=50054
+      - PEERS=file_service_1:50051,file_service_3:50053,file_service_4:50055
+    ports:
+      - "50054:50054"
+    networks:
+      - dist_net
+    restart: on-failure
+
+  file_service_3:
+    build: .
+    container_name: file_service_3
+    command: ["python3", "-m", "services.file_service.server"]
+    environment:
+      - ROLE=file_service
+      - SERVER_ID=server-3
+      - IS_LEADER=false
+      - RPC_HOST=0.0.0.0
+      - RPC_PORT=50053
+      - PEERS=file_service_1:50051,file_service_2:50054,file_service_4:50055
+    ports:
+      - "50053:50053"
+    networks:
+      - dist_net
+    restart: on-failure
+  
+  file_service_4:
+    build: .
+    container_name: file_service_4
+    command: ["python3", "-m", "services.file_service.server"]
+    environment:
+      - ROLE=file_service
+      - SERVER_ID=server-4
+      - IS_LEADER=false
+      - RPC_HOST=0.0.0.0
+      - RPC_PORT=50055
+      - PEERS=file_service_1:50051,file_service_2:50054,file_service_3:50053
+    ports:
+      - "50055:50055"
+    networks:
+      - dist_net
+    restart: on-failure
+
   coordinator:
     build: .
     container_name: coordinator
@@ -21,12 +75,16 @@ services:
       - ROLE=coordinator
       - COORDINATOR_HOST=0.0.0.0
       - COORDINATOR_PORT=50052
-      - FILE_SERVICE_HOST=file_service
+      - FILE_SERVICE_HOST=file_service_1
       - FILE_SERVICE_PORT=50051
+      - FILE_SERVICE_PEERS=file_service_1:50051,file_service_2:50054,file_service_3:50053,file_service_4:50055
     depends_on:
-      - file_service
+      - file_service_1
+      - file_service_2
+      - file_service_3
+      - file_service_4
     ports:
-      - "50052:50052"  # expose if you want to test from host
+      - "50052:50052"
     networks:
       - dist_net
     restart: on-failure
@@ -38,11 +96,12 @@ services:
       - ROLE=worker
       - COORDINATOR_HOST=coordinator
       - COORDINATOR_PORT=50052
-      - FILE_SERVICE_HOST=file_service
+      - FILE_SERVICE_HOST=file_service_1
       - FILE_SERVICE_PORT=50051
+      - FILE_SERVICE_PEERS=file_service_1:50051,file_service_2:50054,file_service_3:50053,file_service_4:50055
     depends_on:
       - coordinator
-      - file_service
+      - file_service_1
     networks:
       - dist_net
     restart: on-failure
