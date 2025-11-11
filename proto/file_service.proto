@@ -8,7 +8,18 @@ service FileService {
   rpc UploadFile(UploadRequest) returns (UploadResponse);   // this is from client to server
   rpc TestAuth(TestAuthRequest) returns (TestAuthResponse);
   rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
+
+  // all in one
+  rpc ReplicateFile(ReplicateRequest) returns (UploadResponse);
+
+  // Election/health
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc RequestVote(VoteRequest) returns (VoteResponse);
+
+  rpc CleanupTemp(CleanupTempRequest) returns (CleanupTempResponse);
+  rpc CommitFile(CommitRequest) returns (CommitResponse);
 }
+
 
 message CreateRequest {
   string filename = 1;
@@ -34,11 +45,13 @@ message OpenResponse {
 message UploadRequest {
   string filename = 1;
   bytes data = 2;
+  // should i add a version number
 }
 
 message UploadResponse {
   bool success = 1;
   string message = 2;
+  string leader_host = 3; // optional for helping client redirect
 }
 
 message TestAuthRequest {
@@ -64,4 +77,51 @@ message ListFilesRequest {
 
 message ListFilesResponse {
   repeated FileTuple files = 1;
+}
+
+//// Alternative to all this
+message ReplicateRequest {
+  string filename = 1;
+  bytes data = 2;
+  string request_id = 3;
+}
+
+message HeartbeatRequest {
+  string leader_id = 1;
+  uint64 term = 2;
+}
+
+message HeartbeatResponse {
+  bool ok = 1;
+  uint64 term = 2;
+}
+
+message VoteRequest {
+  uint64 term = 1;
+  string candidate_id = 2;
+}
+
+message VoteResponse {
+  bool vote_granted = 1;
+  uint64 term = 2;
+}
+
+message CleanupTempRequest {
+  string filename = 1;
+  string request_id = 2;
+}
+
+message CleanupTempResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+message CommitRequest {
+  string filename = 1;
+  string request_id = 2;
+}
+
+message CommitResponse {
+  bool success = 1;
+  string message = 2;
 }
