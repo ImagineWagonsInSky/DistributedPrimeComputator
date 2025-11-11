@@ -256,7 +256,7 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
 
         # Final decision based on votes received from reachable nodes
         with self.lock:
-            if votes >= majority:
+            if votes >= majority and self.current_term == term and self.role == "candidate":
                 self.role = "leader"
                 new_host = os.getenv("RPC_HOST", "0.0.0.0")
                 new_port = os.getenv("RPC_PORT", "50051")
@@ -271,6 +271,7 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
 
     def send_heartbeats(self):
         while True:
+            print(f"I am {self.server_id} and am I leader? {self.role} and I think that {self.leader_host} is the leader")
             with self.lock:
                 if self.role != "leader":
                     break

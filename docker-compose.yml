@@ -77,6 +77,7 @@ services:
       - COORDINATOR_PORT=50052
       - FILE_SERVICE_HOST=file_service_1
       - FILE_SERVICE_PORT=50051
+      - FILE_SERVICE_PEERS=file_service_1:50051,file_service_2:50054,file_service_3:50053,file_service_4:50055
     depends_on:
       - file_service_1
       - file_service_2
@@ -97,6 +98,7 @@ services:
       - COORDINATOR_PORT=50052
       - FILE_SERVICE_HOST=file_service_1
       - FILE_SERVICE_PORT=50051
+      - FILE_SERVICE_PEERS=file_service_1:50051,file_service_2:50054,file_service_3:50053,file_service_4:50055
     depends_on:
       - coordinator
       - file_service_1
