@@ -1,3 +1,5 @@
+import math
+
 import grpc
 from concurrent import futures
 from proto.generated.file_service import file_service_pb2, file_service_pb2_grpc
@@ -5,7 +7,9 @@ import os
 import time
 
 DATA_DIR = "services/file_service/server_store"
+SUBDIVISIONS_DIR = "services/file_service/server_store/subdivisions"
 os.makedirs(DATA_DIR, exist_ok=True)
+
 
 def file_timestamp(path):
     return int(os.path.getmtime(path))
@@ -122,6 +126,61 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
                 ))
 
         return file_service_pb2.ListFilesResponse(files=files)
+
+    def RequestSubdivisions(self, request, context):
+        #Create a directory for holding subdivisions, separately from other files
+        os.makedirs(SUBDIVISIONS_DIR, exist_ok=True)
+
+        size = request.subdivision_size
+        all_files = os.listdir(DATA_DIR)
+        for f in all_files:
+            path = os.path.join(DATA_DIR, f)
+            if os.path.isfile(f):
+                self.divide_file(f, size)
+
+        return file_service_pb2.RequestDivisionResponse(success=True)
+
+
+#Proposition for file division function, a bit ugly, could be cleaned up.
+    def divide_file(self, filename, subdivision_size):
+        with open(os.path.join(DATA_DIR, filename), "rb") as f:
+            main_file_lines = f.readlines()
+            subdivision_count = math.ceil(len(main_file_lines) / subdivision_size)
+            for i in range(subdivision_count):
+                #sd{i} meaning subdivision of number 'i' e.g. inputfile_003_sd2.txt
+                current_subdivision_filename = f"{filename.strip(".txt")}_sd{i}.txt"
+
+                sd_file = open(os.path.join(DATA_DIR, current_subdivision_filename), "wb")
+                try:
+                    sd_file.write(main_file_lines[i * subdivision_size :
+                                                  (i + 1) * subdivision_size])
+                except IndexError:
+                    try:
+                        leftover_lines = len(main_file_lines) % subdivision_size
+                        sd_file.write(main_file_lines[i * subdivision_size :
+                                                      i * subdivision_size + leftover_lines])
+                    except:
+                        sd_file.close()
+                        os.remove(sd_file.name)
+                        print("Failed to divide file")
+
+
+                sd_file.close()
+
+        print(f"Created {subdivision_count} subdivisions for file {filename}")
+
+    #Clear up the subdivion files for particular original file, might as well clear them all at the end, but that is an easy change to make
+    def cleanup_subdivisions(self, filename):
+        for f in os.listdir(SUBDIVISIONS_DIR):
+            #This part feels kinda ugly, there should be a better way to do this
+            if f"{filename.strip(".txt")}" in f:
+                try:
+                    sd_file = os.path.join(DATA_DIR, f)
+                    os.remove(sd_file)
+                except OSError:
+                    pass
+        print(f"Cleaned up subdivisions for {filename}")
+
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4), options=[('grpc.max_send_message_length', -1),('grpc.max_receive_message_length', -1),])

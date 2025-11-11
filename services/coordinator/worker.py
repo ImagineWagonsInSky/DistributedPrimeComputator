@@ -54,6 +54,9 @@ class Worker():
         self.last_snapshot_id = None
         print(f"Worker starting up with ID: {self.worker_id}")
 
+        # --- PRESERVE CHUNKS/TASKS UNTIL SNAPSHOT ---
+        self.saved_primes = {}
+
     def run(self):
         """
         The main processing loop for the worker.
@@ -129,11 +132,14 @@ class Worker():
             except grpc.RpcError as e:
                 print(f"gRPC error when trying to close file: {e.details()}")
 
+        #Preservation of the chunks, will clear them on receiving snapshot marker
+        self.saved_primes.update({task : primes_found})
         return primes_found
 
+    #ADD SNAPSHOT RECOVERY PROCESS FOR THE WORKER
     def _handle_snapshot_marker(self, snapshot_id):
         """
-        Checks if the marker is new, if it is save worker state and send to coordinator.
+        Checks if the marker is new, if it is, save worker state and send to coordinator.
         """
         if snapshot_id and snapshot_id != self.last_snapshot_id:
             print(f"Received marker: {snapshot_id}")
@@ -152,6 +158,9 @@ class Worker():
 
                 state_bytes = pickle.dumps(task_data)
 
+                #Clear preserved chunks on getting snapshot, which confirms that the chunks have been saved to the file server
+                self.saved_primes.clear()
+
             except Exception as e:
                 print(f"Error when pickling worker state: {e}")
                 state_bytes = pickle.dumps(None)
@@ -167,6 +176,13 @@ class Worker():
                 print(f"Submitted snapshot chunk for {snapshot_id}")
             except grpc.RpcError as e:
                 print(f"Error when submitting snapshot chunk: {e.details()}")
+
+
+    def recover(self):
+        return None
+
+    def request_snapshot(self, snapshot_id):
+        return None
 
 if __name__ == "__main__":
     worker = Worker()

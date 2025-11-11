@@ -70,12 +70,19 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         
     def _populate_queues(self):
         """
-        Populate work queue with all files on fileserver seperatee into CHUNK_SIZE pieces
+        Populate work queue with all files on fileserver separate into CHUNK_SIZE pieces
         """
         self.task_queues = {}
         task_counter = 0
         
-        filename_list = self.filesystem_stub.ListFiles(file_service_pb2.ListFilesRequest())
+        filename_list = {}
+        if(self.check_subdivision_need(filename_list)):
+            #Wait for subdivisions to get created, not sure how to do that yet
+            filename_list = self.filesystem_stub.ListFiles(file_service_pb2.ListFilesRequest()) #Supposed to be a list of subdivisions files instead of a normal list of files
+        else:
+            #If the files are reasonable in size
+            filename_list = self.filesystem_stub.ListFiles(file_service_pb2.ListFilesRequest())
+
         for f in filename_list.files:
             if not f.filename == "primes.txt":
                 self.task_queues[f.filename] = []
@@ -95,7 +102,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
             # Use worker_id to fetch the preferred input file
             worker_id = request.worker_id
             preferred_file = self.worker_affinity.get(worker_id)
-            task_to_assign = None 
+            task_to_assign = None
 
             if preferred_file and self.task_queues.get(preferred_file):
                 task_to_assign = self.task_queues[preferred_file].pop(0)    
@@ -149,7 +156,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         """
         worker_id = request.worker_id
 
-        # Record channel if the snapshot is active and we are currently recording messages from this worker (== "PENDING") 
+        # Record channel if the snapshot is active and we are currently recording messages from this worker (== "PENDING")
         with self.snapshot_lock:
             if self.current_snapshot_id and self.workers_in_snapshot.get(worker_id) == "PENDING":
                 self.pending_snapshot["in_flight_messages"][worker_id].append(request)
@@ -264,7 +271,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
 
         except grpc.RpcError as e:
             print(f"gRPC error when saving snapshot: {e.details()}")
-    
+
     def _load_latest_snapshot(self):
         """
         If a snapshot exists on the fileserver, it unpickles it and restores the coordinator state from that.
@@ -323,6 +330,26 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         except grpc.RpcError as e:
             print(f"Failed to load snapshot: {e.details()}.")
             return False
+
+    #Experimental function, if there are very few, very large files, it might be optimal to create subfiles to be downloaded by the workers instead
+    def request_file_division(self, subdivision_size):
+        return coordinator_pb2.RequestDivision(subdivision_size = subdivision_size)
+
+    def check_subdivision_need(self, file_list, worker_count):
+        maximum_size = self.CHUNK_SIZE * 1000
+        optimal_size = self.CHUNK_SIZE * 100
+        if(len(file_list) < worker_count):
+            self.request_file_division(optimal_size)
+            return True
+        for f in file_list:
+            if f.size > maximum_size:
+                self.request_file_division(optimal_size)
+                return True
+        return False
+
+    def recover_worker_chunks(self):
+        return None
+
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
