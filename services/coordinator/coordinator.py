@@ -67,27 +67,22 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         print("Coordinator initialized")
 
         self._start_snapshot_timer()
-        
+
     def _populate_queues(self):
         """
         Populate work queue with all files on fileserver seperatee into CHUNK_SIZE pieces
         """
         self.task_queues = {}
+        # If the files have reasonable size
         filename_list = self.filesystem_stub.ListFiles(file_service_pb2.ListFilesRequest())
 
-
-        #NOT SURE WHAT TO DO WITH THIS PART
         if (self.check_subdivision_need(filename_list)):
             # Wait for subdivisions to get created, not sure how to do that yet
-            filename_list = self.filesystem_stub.ListFiles(
-                file_service_pb2.ListFilesRequest())  # Supposed to be a list of subdivisions files instead of a normal list of files
-        else:
-            # If the files have reasonable size
-            filename_list = self.filesystem_stub.ListFiles(file_service_pb2.ListFilesRequest())
+            filename_list = self.filesystem_stub.ListSubdivisionFiles(
+                file_service_pb2.ListSubdivisionFilesRequest()) # Supposed to be a list of subdivisions files instead of a normal list of files
 
         task_counter = 0
         
-        filename_list = self.filesystem_stub.ListFiles(file_service_pb2.ListFilesRequest())
         for f in filename_list.files:
             if not f.filename == "primes.txt":
                 self.task_queues[f.filename] = []
@@ -352,7 +347,29 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         return False
 
     def recover_worker_chunks(self):
+        
         return None
+    
+    def HeartBeat(self, request_iterator, context):
+        worker_id = None
+        try:
+            for heartbeat in request_iterator:
+                worker_id = heartbeat.worker_id
+                
+                # need lock here?
+                self.active_workers.add(worker_id)
+            
+            if worker_id:
+                self.active_workers.remove(worker_id)
+
+        except grpc.RpcError as e:
+            print(f"Worker {worker_id}'s Heartbeat stream failed ")
+        return google.protobuf.empty_pb2.Empty()
+    
+    def _handle_heartbeat(self):
+        # Move to tasks in progress back to the main queue.
+        # clean up some other attributes
+        pass
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))

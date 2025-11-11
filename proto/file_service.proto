@@ -8,6 +8,7 @@ service FileService {
   rpc UploadFile(UploadRequest) returns (UploadResponse);   // this is from client to server
   rpc TestAuth(TestAuthRequest) returns (TestAuthResponse);
   rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
+  rpc ListSubdivisionFiles(ListSubdivisionFilesRequest) returns (ListSubdivisionFilesResponse);
 
   // all in one
   rpc ReplicateFile(ReplicateRequest) returns (UploadResponse);
@@ -144,4 +145,13 @@ message ReplicateDivision {
 
 message ReplicateDivisionResponse {
     bool success = 1;
+}
+
+message ListSubdivisonFilesRequest {
+  uint32 offset = 1;
+  uint32 limit = 2;
+}
+
+message ListSubdivisonFilesResponse {
+  repeated FileTuple files = 1;
 }

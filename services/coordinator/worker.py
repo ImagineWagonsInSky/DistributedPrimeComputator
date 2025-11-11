@@ -7,6 +7,7 @@ import argparse
 import os
 import pickle
 import uuid
+import threading
 from services.file_service import client
 
 parser = argparse.ArgumentParser()
@@ -57,6 +58,8 @@ class Worker():
         # --- PRESERVING CHUNKS ---
         self.preserved_chunks = {}
 
+        # --- Heartbeats
+    
     def run(self):
         """
         The main processing loop for the worker.
@@ -91,6 +94,12 @@ class Worker():
             except grpc.RpcError as e:
                 print(f"gRPC Error: {e.details()}. Retrying in 2 seconds...")
                 time.sleep(2) 
+
+    def _start_heartbeat_timer(self):
+        threading.Timer(5.0, self._send_heartbeat).start()
+
+    def _send_heartbeat(self):
+        self.coordinator_stub.Heartbeat(coordinator_pb2.HeartbeatRequest(worker_id=self.worker_id))
 
     def _process_task(self, task):
         """
@@ -186,9 +195,6 @@ class Worker():
             # Handle potential snapshot marker
             self._handle_snapshot_marker(submit_response.snapshot_id)
 
-        return None
-
-    def HeartbeatResponse(self):
         return None
 
 if __name__ == "__main__":
