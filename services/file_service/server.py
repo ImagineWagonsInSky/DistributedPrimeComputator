@@ -152,12 +152,15 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
 
         acks = 1
         for peer in self.peers:
+            try:
                 channel = grpc.insecure_channel(peer)
                 stub = file_service_pb2_grpc.FileServiceStub(channel)
                 resp = stub.ReplicateFile(
                     file_service_pb2.ReplicateRequest(filename=filename, data=data, request_id=request_id), timeout=5)
                 if resp.success:
                     acks += 1
+            except Exception as e:
+                print(f"Failed to replicate to {peer}: {e}")
 
         majority = (self.cluster_size // 2) + 1
         if acks < majority:

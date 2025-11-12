@@ -62,6 +62,9 @@ class Worker():
         """
         The main processing loop for the worker.
         """
+        heartbeat_thread = threading.Thread(target=self._send_heartbeat_loop, daemon=True)
+        heartbeat_thread.start()
+
         while True:
             try:
                 work_request = coordinator_pb2.GetWorkRequest(worker_id = self.worker_id)
@@ -93,11 +96,22 @@ class Worker():
                 print(f"gRPC Error: {e.details()}. Retrying in 2 seconds...")
                 time.sleep(2) 
 
-    def _start_heartbeat_timer(self):
-        threading.Timer(5.0, self._send_heartbeat).start()
+    def _send_heartbeat_loop(self):
+        """
+        Continuously send heartbeats to coordinator via streaming RPC.
+        Retries on failure.
+        """
+        def heartbeat_generator():
+            while True:
+                yield coordinator_pb2.HeartbeatRequest(worker_id=self.worker_id)
+                time.sleep(2)
 
-    def _send_heartbeat(self):
-        self.coordinator_stub.Heartbeat(coordinator_pb2.HeartbeatRequest(worker_id=self.worker_id))
+        while True:
+            try:
+                self.coordinator_stub.Heartbeat(heartbeat_generator())
+            except grpc.RpcError as e:
+                print(f"Heartbeat stream failed: {e}. Retrying in 2 seconds...")
+                time.sleep(2)
 
     def _process_task(self, task):
         """
@@ -105,11 +119,13 @@ class Worker():
         """
         
         primes_found = []
+        local_path = os.path.join(self.local_cache_dir, task.filename)
+
         try:
-            local_path = os.path.join(self.local_cache_dir, task.filename)
-            local_file, _ = client.open_or_validate(self.filesystem_stub, local_path) 
+            local_file, _ = client.open_or_validate(self.filesystem_stub, local_path)
         except grpc.RpcError as e:
-                print(f"gRPC error when trying to open a remote file: {e.details()}.")
+            print(f"gRPC error when trying to open remote file: {e.details()}.")
+            return []  # Cannot process without file
 
         start = task.start_line
         end = task.start_line + task.num_lines

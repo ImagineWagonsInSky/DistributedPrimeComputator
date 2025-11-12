@@ -70,8 +70,8 @@ def open_or_validate(stub, local_path, max_retries=7):
     tmp_path = local_path + ".tmp"
 
     try:
-        grpc_start_time = time.time()
-        print(f"[TIMER] Pure gRPC OpenFile call STARTED for '{filename}'")
+        #grpc_start_time = time.time()
+        #print(f"[TIMER] Pure gRPC OpenFile call STARTED for '{filename}'")
 
         # Manual Test Pause for Server Crash
         #print(f"\n[TEST MODE] Pausing for 15 seconds. Kill File Server NOW")
@@ -87,8 +87,8 @@ def open_or_validate(stub, local_path, max_retries=7):
             backoff=1.0,
         )
 
-        grpc_end_time = time.time()
-        grpc_duration = grpc_end_time - grpc_start_time
+        #grpc_end_time = time.time()
+        #grpc_duration = grpc_end_time - grpc_start_time
         #print(f"[TIMER] Pure gRPC OpenFile call ended, Duration: {grpc_duration:.3f}s (includes retries)")
 
     except grpc.RpcError:
