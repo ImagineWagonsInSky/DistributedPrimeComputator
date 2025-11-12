@@ -163,7 +163,13 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         # Record channel if the snapshot is active and we are currently recording messages from this worker (== "PENDING")
         with self.snapshot_lock:
             if self.current_snapshot_id and self.workers_in_snapshot.get(worker_id) == "PENDING":
-                self.pending_snapshot["in_flight_messages"][worker_id].append(request)
+                # Convert protobuf to dict for pickling (protobuf objects cannot be pickled)
+                msg_dict = {
+                    "primes": list(request.primes),
+                    "task_id": request.task_id,
+                    "worker_id": request.worker_id
+                }
+                self.pending_snapshot["in_flight_messages"][worker_id].append(msg_dict)
 
         with self.primes_lock:
             new_primes = []
@@ -325,7 +331,13 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
 
             # Reprocess all in flight messages
             for worker_id, messages in snapshot_data["in_flight_messages"].items():
-                for msg in messages:
+                for msg_dict in messages:
+                    # Reconstruct protobuf from dict
+                    msg = coordinator_pb2.SubmitBatchRequest(
+                        primes=msg_dict["primes"],
+                        task_id=msg_dict["task_id"],
+                        worker_id=msg_dict["worker_id"]
+                    )
                     self.SubmitPrimeBatch(msg, None)
 
             print("SNAPSHOT LOADED SUCCESSFULLY")
