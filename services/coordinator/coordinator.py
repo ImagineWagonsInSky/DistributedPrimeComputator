@@ -339,15 +339,12 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         if(len(file_list.files) < 8):
             self.request_file_division(optimal_size)
             return True
-        for f in file_list:
-            if f.size > maximum_size:
+        for f in file_list.files:
+            detected_size = len(f.readlines())
+            if detected_size > maximum_size:
                 self.request_file_division(optimal_size)
                 return True
         return False
-
-    def recover_worker_chunks(self):
-        
-        return None
     
     def HeartBeat(self, request_iterator, context):
         worker_id = None
