@@ -311,9 +311,10 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
         size = request.subdivision_size
         all_files = os.listdir(DATA_DIR)
         for f in all_files:
-            path = os.path.join(DATA_DIR, f)
-            if os.path.isfile(f):
-                self.divide_file(f, size)
+            if "input" in f:
+                path = os.path.join(DATA_DIR, f)
+                if os.path.isfile(f):
+                    self.divide_file(f, size)
 
 
         for peer in self.peers:
@@ -330,9 +331,10 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
         size = request.subdivision_size
         all_files = os.listdir(DATA_DIR)
         for f in all_files:
-            path = os.path.join(DATA_DIR, f)
-            if os.path.isfile(f):
-                self.divide_file(f, size)
+            if "input" in f:
+                path = os.path.join(DATA_DIR, f)
+                if os.path.isfile(f):
+                    self.divide_file(f, size)
         return file_service_pb2.ReplicateDivisionResponse(success=True)
 
 
@@ -347,12 +349,12 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
 
                 sd_file = open(os.path.join(SUBDIVISIONS_DIR, current_subdivision_filename), "wb")
                 try:
-                    sd_file.write(main_file_lines[i * subdivision_size :
+                    sd_file.writelines(main_file_lines[i * subdivision_size :
                                                       (i + 1) * subdivision_size])
                 except IndexError:
                     try:
                         leftover_lines = len(main_file_lines) % subdivision_size
-                        sd_file.write(main_file_lines[i * subdivision_size :
+                        sd_file.writelines(main_file_lines[i * subdivision_size :
                                                           i * subdivision_size + leftover_lines])
                     except:
                         sd_file.close()
