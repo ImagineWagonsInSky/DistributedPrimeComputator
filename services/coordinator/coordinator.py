@@ -287,7 +287,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         If a snapshot exists on the fileserver, it unpickles it and restores the coordinator state from that.
         """
         try:
-            local_file, _ = client.open_or_validate(self.filesystem_stub, self.SNAPSHOT_PATH) 
+            local_file, _ = client.open_or_validate(self.filesystem_stub, self.SNAPSHOT_PATH)
 
             if local_file is None:
                 print("No snapshot file found on server")
@@ -295,8 +295,15 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
 
             with open(local_file, "rb") as f:
                 snapshot_bytes = f.read()
-            
-            snapshot_data = pickle.loads(snapshot_bytes)
+
+            try:
+                snapshot_data = pickle.loads(snapshot_bytes)
+            except (pickle.UnpicklingError, ModuleNotFoundError, AttributeError, ImportError) as e:
+                print(f"Failed to unpickle snapshot (likely from old version): {e}")
+                print("Deleting corrupted snapshot and starting fresh...")
+                if os.path.exists(local_file):
+                    os.remove(local_file)
+                return False
 
             # Restore coordintator state
             coordinator_state = pickle.loads(snapshot_data["coordinator_state"])
@@ -330,15 +337,19 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
                 self.tasks_in_progress.clear()
 
             # Reprocess all in flight messages
-            for worker_id, messages in snapshot_data["in_flight_messages"].items():
+            for worker_id, messages in snapshot_data.get("in_flight_messages", {}).items():
                 for msg_dict in messages:
-                    # Reconstruct protobuf from dict
-                    msg = coordinator_pb2.SubmitBatchRequest(
-                        primes=msg_dict["primes"],
-                        task_id=msg_dict["task_id"],
-                        worker_id=msg_dict["worker_id"]
-                    )
-                    self.SubmitPrimeBatch(msg, None)
+                    try:
+                        # Reconstruct protobuf from dict
+                        msg = coordinator_pb2.SubmitBatchRequest(
+                            primes=msg_dict["primes"],
+                            task_id=msg_dict["task_id"],
+                            worker_id=msg_dict["worker_id"]
+                        )
+                        self.SubmitPrimeBatch(msg, None)
+                    except (KeyError, TypeError) as e:
+                        print(f"Skipping corrupted in-flight message from worker {worker_id}: {e}")
+                        continue
 
             print("SNAPSHOT LOADED SUCCESSFULLY")
             return True
