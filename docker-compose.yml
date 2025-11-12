@@ -105,12 +105,6 @@ services:
     networks:
       - dist_net
     restart: on-failure
-    # optionally adjust resources
-    # deploy:
-    #   resources:
-    #     limits:
-    #       cpus: '0.50'
-    #       memory: 256M
 
 networks:
   dist_net:

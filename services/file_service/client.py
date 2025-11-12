@@ -232,17 +232,3 @@ def close_file(stub, path, peers_env_key="FILE_SERVICE_PEERS", max_retries=2):
     print("Failed to upload file to leader after trying hints and peers.")
 
 
-# def close_file(stub, path):
-#     filename = os.path.basename(path)
-#     ts_file = path + ".ts"
-#     if not os.path.exists(path):
-#         print("No local file in cache to close")
-#         return
-#     with open(path, "rb") as f:
-#         data = f.read()
-#     resp = stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
-#     print(f"Upload result: {resp.message}")
-#     new_resp = stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=0))
-#     with open(ts_file, "w") as f:
-#         f.write(str(new_resp.server_timestamp))
-
