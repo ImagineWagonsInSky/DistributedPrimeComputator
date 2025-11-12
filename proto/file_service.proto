@@ -25,7 +25,6 @@ service FileService {
   rpc ReplicateSubdivisions(ReplicateDivision) returns (ReplicateDivisionResponse);
 }
 
-
 message CreateRequest {
   string filename = 1;
   bytes data = 2;

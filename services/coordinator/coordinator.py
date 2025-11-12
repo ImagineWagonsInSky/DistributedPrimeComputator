@@ -65,7 +65,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
             print("No snapshot found, populating the fresh queue")    
             self._populate_queues()
         print("Coordinator initialized")
-
+        self._initiate_snapshot()
         self._start_snapshot_timer()
 
     def _populate_queues(self):
@@ -76,11 +76,10 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         # If the files have reasonable size
         filename_list = self.filesystem_stub.ListFiles(file_service_pb2.ListFilesRequest())
 
-        if (self.check_subdivision_need(filename_list)):
-            # Wait for subdivisions to get created, not sure how to do that yet
-            filename_list = self.filesystem_stub.ListSubdivisionFiles(
-                file_service_pb2.ListSubdivisionFilesRequest()) # Supposed to be a list of subdivisions files instead of a normal list of files
-
+        # if (self.check_subdivision_need(filename_list)):
+        #     # Wait for subdivisions to get created, not sure how to do that yet
+        #     filename_list = self.filesystem_stub.ListSubdivisionFiles(
+        #         file_service_pb2.ListSubdivisionFilesRequest()) # Supposed to be a list of subdivisions files instead of a normal list of files
         task_counter = 0
         
         for f in filename_list.files:
@@ -332,12 +331,12 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
             return False
 
     def request_file_division(self, subdivision_size):
-        return coordinator_pb2.RequestDivision(subdivision_size=subdivision_size)
+        return file_service_pb2.RequestDivision(subdivision_size=subdivision_size)
 
-    def check_subdivision_need(self, file_list, worker_count):
+    def check_subdivision_need(self, file_list):
         maximum_size = self.CHUNK_SIZE * 1000
         optimal_size = self.CHUNK_SIZE * 100
-        if(len(file_list) < worker_count):
+        if(len(file_list.files) < 8):
             self.request_file_division(optimal_size)
             return True
         for f in file_list:

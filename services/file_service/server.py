@@ -345,7 +345,7 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
                 #sd{i} meaning subdivision of number 'i' e.g. inputfile_003_sd2.txt
                 current_subdivision_filename = f"{filename.strip(".txt")}_sd{i}.txt"
 
-                sd_file = open(os.path.join(DATA_DIR, current_subdivision_filename), "wb")
+                sd_file = open(os.path.join(SUBDIVISIONS_DIR, current_subdivision_filename), "wb")
                 try:
                     sd_file.write(main_file_lines[i * subdivision_size :
                                                       (i + 1) * subdivision_size])

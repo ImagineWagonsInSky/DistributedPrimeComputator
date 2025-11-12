@@ -4,6 +4,7 @@ import json
 DATA_DIR = "services/file_service/server_store"
 SUBDIVISIONS_DIR = "services/file_service/server_store/subdivisions"
 os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(SUBDIVISIONS_DIR, exist_ok=True)
 
 META_PATH = os.path.join(DATA_DIR, "meta.json")
 
