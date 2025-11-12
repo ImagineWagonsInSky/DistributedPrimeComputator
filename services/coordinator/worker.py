@@ -129,23 +129,30 @@ class Worker():
 
         start = task.start_line
         end = task.start_line + task.num_lines
-        
+
         try:
-            with open(local_file, 'r') as f:
+            with open(local_file, 'r', encoding='utf-8', errors='ignore') as f:
                 for i, line in enumerate(f):
                     if i < start:
                         continue
-                    
+
                     if i >= end:
                         break
-                    
-                    number = int(line.strip())
-                    # currently just using deterministic miller_rabin but should be easy to change
-                    if prime_testing.miller_rabin_deterministic(number):
-                        primes_found.append(number)
-                        
+
+                    try:
+                        number = int(line.strip())
+                        # currently just using deterministic miller_rabin but should be easy to change
+                        if prime_testing.miller_rabin_deterministic(number):
+                            primes_found.append(number)
+                    except ValueError:
+                        # Skip lines that aren't valid integers
+                        continue
+
         except FileNotFoundError:
             print(f"Error: Local cache file not found at {local_file}")
+            return []
+        except UnicodeDecodeError as e:
+            print(f"Error: File encoding issue - {e}")
             return []
         
         finally:

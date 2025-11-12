@@ -160,7 +160,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         """
         worker_id = request.worker_id
 
-        # Record channel if the snapshot is active and we are currently recording messages from this worker (== "PENDING") 
+        # Record channel if the snapshot is active and we are currently recording messages from this worker (== "PENDING")
         with self.snapshot_lock:
             if self.current_snapshot_id and self.workers_in_snapshot.get(worker_id) == "PENDING":
                 self.pending_snapshot["in_flight_messages"][worker_id].append(request)
