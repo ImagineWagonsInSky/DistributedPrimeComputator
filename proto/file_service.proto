@@ -132,7 +132,7 @@ message CommitResponse {
 }
 
 message RequestDivision {
-    int subdivision_size = 1;
+    uint32 subdivision_size = 1;
 }
 
 message RequestDivisionResponse {
@@ -140,18 +140,18 @@ message RequestDivisionResponse {
 }
 
 message ReplicateDivision {
-    int subdivision_size = 1;
+    uint32 subdivision_size = 1;
 }
 
 message ReplicateDivisionResponse {
     bool success = 1;
 }
 
-message ListSubdivisonFilesRequest {
+message ListSubdivisionFilesRequest {
   uint32 offset = 1;
   uint32 limit = 2;
 }
 
-message ListSubdivisonFilesResponse {
+message ListSubdivisionFilesResponse {
   repeated FileTuple files = 1;
 }

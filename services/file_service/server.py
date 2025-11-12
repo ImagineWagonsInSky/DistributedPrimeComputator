@@ -286,6 +286,24 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
 
         return file_service_pb2.ListFilesResponse(files=files)
 
+    def ListSubdivisionFiles(self, request, context):
+        files = []
+        all_files = os.listdir(SUBDIVISIONS_DIR)
+        meta_filename = os.path.basename(META_PATH)
+        start = request.offset
+        end = start + request.limit if request.limit > 0 else len(all_files)
+
+        for name in all_files[start:end]:
+            if name == meta_filename:
+                continue
+            path = os.path.join(SUBDIVISIONS_DIR, name)
+            if os.path.isfile(path):
+                files.append(file_service_pb2.FileTuple(
+                    filename=name,
+                    size=os.path.getsize(path)
+                ))
+        return file_service_pb2.ListSubdivisionFilesResponse(files=files)
+
     def RequestSubdivisions(self, request, context):
         #Create a directory for holding subdivisions, separately from other files
         os.makedirs(SUBDIVISIONS_DIR, exist_ok=True)
