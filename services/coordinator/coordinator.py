@@ -260,7 +260,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         Overwrites previous snapshot and saves it to fileserver
         """
 
-        print("Saving global snapshot to FS...")
+        print("Saving the global snapshot to fileserver")
         try:
             snapshot_bytes = pickle.dumps(snapshot_data)
 

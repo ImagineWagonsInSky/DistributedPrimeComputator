@@ -57,8 +57,6 @@ class Worker():
 
         # --- PRESERVING CHUNKS ---
         self.preserved_chunks = {}
-
-        # --- Heartbeats
     
     def run(self):
         """
@@ -105,14 +103,13 @@ class Worker():
         """
         Handles primality testing
         """
-        print(f"Processing chunk: {task.filename}...")
         
         primes_found = []
         try:
             local_path = os.path.join(self.local_cache_dir, task.filename)
             local_file, _ = client.open_or_validate(self.filesystem_stub, local_path) 
         except grpc.RpcError as e:
-                print(f"gRPC Error when opening remote file: {e.details()}.")
+                print(f"gRPC error when trying to open a remote file: {e.details()}.")
 
         start = task.start_line
         end = task.start_line + task.num_lines
@@ -127,7 +124,7 @@ class Worker():
                         break
                     
                     number = int(line.strip())
-                    # currently just using deterministic but should be easy to change
+                    # currently just using deterministic miller_rabin but should be easy to change
                     if prime_testing.miller_rabin_deterministic(number):
                         primes_found.append(number)
                         
@@ -141,6 +138,7 @@ class Worker():
             except grpc.RpcError as e:
                 print(f"gRPC error when trying to close file: {e.details()}")
 
+        # Preserved chunks in case of coordinator failture.
         self.preserved_chunks.update({"Task" : task, "preserved_primes" : primes_found})
         return primes_found
 
@@ -152,7 +150,7 @@ class Worker():
             print(f"Received marker: {snapshot_id}")
             self.last_snapshot_id = snapshot_id
 
-            # Save worker state (current task)
+            # Save worker state current task object 
             try:
                 task_data = None
                 if self.current_task:
@@ -166,7 +164,7 @@ class Worker():
                 state_bytes = pickle.dumps(task_data)
 
             except Exception as e:
-                print(f"Error when pickling worker state: {e}")
+                print(f"Error when pickling the worker state: {e}")
                 state_bytes = pickle.dumps(None)
             
             # Send snapshot to Coordinator
@@ -177,7 +175,6 @@ class Worker():
                     process_state = state_bytes
                 )
                 self.coordinator_stub.SubmitSnapshotChunk(chunk)
-                print(f"Submitted snapshot chunk for {snapshot_id}")
             except grpc.RpcError as e:
                 print(f"Error when submitting snapshot chunk: {e.details()}")
 
