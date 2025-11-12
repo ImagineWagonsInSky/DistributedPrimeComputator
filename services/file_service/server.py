@@ -51,9 +51,6 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
 
 
     def _cleanup_temp_files(self):
-        """
-        Remove any .tmp files that migt be left from crashed uploads
-        """
         for filename in os.listdir(DATA_DIR):
             if filename.endswith('.tmp'):
                 tmp_path = os.path.join(DATA_DIR, filename)
@@ -139,12 +136,10 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
         
         print(f"[Leader] handling UploadFile for {filename}")
 
-        # Write to temp file first, then rename in atomic way to avoid partial files
         request_id = str(int(time.time() * 1000)) + "-" + uuid.uuid4().hex[:8]
         tmp_name = f"{filename}.{request_id}.tmp"
         tmp_path = os.path.join(DATA_DIR, tmp_name)
 
-        # 1. Write local tmp
         try:
             with open(tmp_path, "wb") as f:
                 f.write(data)
@@ -155,7 +150,6 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
 
             return file_service_pb2.UploadResponse(success=False, message=f"Local write failed: {e}")
 
-        # 2. Replicate tmp to followers (so don't commit yet)
         acks = 1
         for peer in self.peers:
                 channel = grpc.insecure_channel(peer)
@@ -173,7 +167,6 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
                 message=f"Failed to replicate {filename} to majority"
             )
 
-        # 3. Commit locally
         final_path = os.path.join(DATA_DIR, filename)
         try:
             os.replace(tmp_path, final_path)
@@ -181,14 +174,12 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
                 self.meta["file_sizes"][filename] = os.path.getsize(final_path)
                 save_meta(self.meta)
         except Exception as e:
-            # tell followers to cleanup if we can't commit locally
             for peer in self.peers:
                 channel = grpc.insecure_channel(peer)
                 stub = file_service_pb2_grpc.FileServiceStub(channel)
                 stub.CleanupTemp(file_service_pb2.CleanupTempRequest(filename=filename, request_id=request_id), timeout=1)
             return file_service_pb2.UploadResponse(success=False, message=f"Commit failed locally: {e}")
     
-        # 4. Tell followers to commit their tmp in best-effort manner
         for peer in self.peers:
             channel = grpc.insecure_channel(peer)
             stub = file_service_pb2_grpc.FileServiceStub(channel)
@@ -197,9 +188,7 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
         return file_service_pb2.UploadResponse(success=True, message="Uploaded and replicated (committed)")
 
     def ReplicateFile(self, request, context):
-        """
-        Follower replica receives file data from leader and stores it locally to a tmp file.
-        """
+    
         filename = request.filename
         request_id = getattr(request, "request_id", None) or str(int(time.time() * 1000))
         data = request.data
@@ -218,9 +207,7 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
             return file_service_pb2.UploadResponse(success=False, message=str(e))
 
     def CommitFile(self, request, context):
-        """
-        Rename stored tmp -> final (commit) on follower.
-        """
+        
         filename = request.filename
         request_id = getattr(request, "request_id", None)
         tmp_name = f"{filename}.{request_id}.tmp" if request_id else None
@@ -228,7 +215,6 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
         final_path = os.path.join(DATA_DIR, filename)
 
         if not tmp_path or not os.path.exists(tmp_path):
-            # nothing to commit
             return file_service_pb2.CommitResponse(success=False, message="no tmp")
         try:
             os.replace(tmp_path, final_path)
@@ -263,11 +249,7 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
             return file_service_pb2.TestAuthResponse(valid=False, message="Cache outdated", server_timestamp=server_ts)
     
     def ListFiles(self, request, context):
-        """
-        Returns repeated list of tuples:
-        (filename: string, size: uint64)
-        Optional offset and file limit
-        """
+        
         files = []
         all_files = os.listdir(DATA_DIR)
         meta_filename = os.path.basename(META_PATH)
@@ -305,7 +287,6 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
         return file_service_pb2.ListSubdivisionFilesResponse(files=files)
 
     def RequestSubdivisions(self, request, context):
-        #Create a directory for holding subdivisions, separately from other files
         os.makedirs(SUBDIVISIONS_DIR, exist_ok=True)
 
         size = request.subdivision_size
