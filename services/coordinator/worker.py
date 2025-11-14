@@ -57,6 +57,9 @@ class Worker():
 
         # --- PRESERVING CHUNKS ---
         self.preserved_chunks = {}
+
+        # --- HEARTBEATS ---
+        self._start_heartbeat_thread()
     
     def run(self):
         """
@@ -93,12 +96,25 @@ class Worker():
                 print(f"gRPC Error: {e.details()}. Retrying in 2 seconds...")
                 time.sleep(2) 
 
-    def _start_heartbeat_timer(self):
-        threading.Timer(5.0, self._send_heartbeat).start()
+    def _start_heartbeat_thread(self):
+        hb_thread = threading.Thread(target=self._send_heartbeats, daemon=True)
+        hb_thread.start()
 
-    def _send_heartbeat(self):
-        self.coordinator_stub.Heartbeat(coordinator_pb2.HeartbeatRequest(worker_id=self.worker_id))
+    def _heartbeat_generator(self):
+        while True:
+            print(f"Worker {self.worker_id}: Sending heartbeat...")
+            yield coordinator_pb2.HeartbeatRequest(worker_id=self.worker_id)
+            time.sleep(5.0)
 
+    def _send_heartbeats(self):
+        try:
+            response_iterator = self.coordinator_stub.Heartbeat(self._heartbeat_generator())
+
+            for response in response_iterator:
+                pass        
+        except Exception as e:
+            print(f"Heartbeat stream failed: {e}")
+        
     def _process_task(self, task):
         """
         Handles primality testing
@@ -150,7 +166,7 @@ class Worker():
             print(f"Received marker: {snapshot_id}")
             self.last_snapshot_id = snapshot_id
 
-            # Save worker state current task object 
+            # Save worker state current tsk object 
             try:
                 task_data = None
                 if self.current_task:

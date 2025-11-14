@@ -9,6 +9,7 @@ import os
 import argparse
 import uuid
 import pickle
+import time
 
 from services.file_service import client
 
@@ -67,6 +68,11 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         print("Coordinator initialized")
         self._initiate_snapshot()
         self._start_snapshot_timer()
+
+        # --- HEARTBEAT STATE ---
+        self.last_heartbeat = {}
+        self.HEARTBEAT_TIMEOUT = 15.0
+        self._start_heartbeat_monitor()
 
     def _populate_queues(self):
         """
@@ -346,26 +352,67 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
                 return True
         return False
     
-    def HeartBeat(self, request_iterator, context):
+    def Heartbeat(self, request_iterator, context):
         worker_id = None
         try:
             for heartbeat in request_iterator:
                 worker_id = heartbeat.worker_id
-                
-                # need lock here?
-                self.active_workers.add(worker_id)
-            
-            if worker_id:
-                self.active_workers.remove(worker_id)
+                print(f"Received heartbeat from worker {worker_id}")
+                self._handle_heartbeat(worker_id)
 
         except grpc.RpcError as e:
             print(f"Worker {worker_id}'s Heartbeat stream failed ")
+        # TODO: finally:
+        #     # Is this not handldeed by heartbeat_check
+        #     pass 
+        
         return google.protobuf.empty_pb2.Empty()
     
-    def _handle_heartbeat(self):
+    def _handle_heartbeat(self, worker_id):
         # Move to tasks in progress back to the main queue.
         # clean up some other attributes
-        pass
+        current_time = time.time()
+        with self.task_queues_lock:
+            self.last_heartbeat[worker_id] = current_time
+            self.active_workers.add(worker_id)
+
+    def _failed_worker_check(self):
+        current_time = time.time()
+
+        with self.task_queues_lock:
+            failed_workers = []
+            for wid, last_heartbeat in self.last_heartbeat.items():
+                # If time exceeds heartbeat timeout
+                if current_time - last_heartbeat > self.HEARTBEAT_TIMEOUT:
+                    print(f"Haven't received recent heartbeat from Worker {wid}")
+                    failed_workers.append(wid)
+            
+            for wid in failed_workers:
+                # Add tasks back to queue
+                task_to_requeue = None 
+                for task_id, (task, assigned_wid) in self.tasks_in_progress.items():
+                    if wid == assigned_wid:
+                        task_to_requeue = (task_id, task)
+                
+                filename = task_to_requeue[1]
+                # TODO: WILL PROB BREAK
+                task_queue = self.task_queues.get(filename, [])
+                task_queue.append(task)
+                self.task_queues[filename] = task_queue
+                
+                # Clean up scheduling data structures
+                del self.tasks_in_progress[task_id]
+                self.active_workers.remove(wid)
+                del self.worker_affinity[wid]
+                del self.last_heartbeat[wid]
+
+    def _start_heartbeat_monitor(self):
+        threading.Timer(0.5, self._heartbeat_check).start()
+    
+    def _heartbeat_check(self):
+        self._failed_worker_check()
+        self._start_heartbeat_monitor()
+
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
