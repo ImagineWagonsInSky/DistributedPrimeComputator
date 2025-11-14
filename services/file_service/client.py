@@ -29,11 +29,11 @@ def _rpc_retry(call_fn, *args, retries=7, backoff=1.0, retry_codes=None, **kwarg
             time.sleep(sleep_for)
     
 def validate(filename, stub, cached_ts):
-    print(f"Found cached copy of '{filename}' with ts={cached_ts}, validating...")
+    print(f"Found cached copy of '{filename}' with version={cached_ts}, validating...")
     try:
         resp = _rpc_retry(
             stub.TestAuth,
-            file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=cached_ts),
+            file_service_pb2.TestAuthRequest(filename=filename, client_version=int(cached_ts)),
         )
     except grpc.RpcError:
         print("Cache validation failed after retries; fetching fresh copy.")
@@ -107,13 +107,18 @@ def open_or_validate(stub, local_path, max_retries=7):
     with open(tmp_path, "wb") as f:
         f.write(resp.data)
 
+    # write server_version (logical)
+    server_ver = getattr(resp, "server_version", None)
+    if server_ver is None:
+        # treat as 0 if server didn't provide it
+        server_ver = 0
     with open(ts_file, "w") as f:
-        f.write(str(resp.server_timestamp))
+        f.write(str(server_ver))
 
     os.replace(tmp_path, local_path)
 
-    print(f"[open_or_validate] file {filename} cached locally with ts={resp.server_timestamp}")
-    return local_path, resp.server_timestamp
+    print(f"[open_or_validate] file {filename} cached locally with version={server_ver}")
+    return local_path, server_ver
 
 def write_bytes_to_local(path, data_bytes):
     filename = os.path.basename(path)
@@ -156,6 +161,7 @@ def close_file(stub, path, peers_env_key="FILE_SERVICE_PEERS", max_retries=2):
         data = f.read()
 
     try:
+        print(f"Closing and updating {filename} to server")
         resp = stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
     except grpc.RpcError as e:
         print(f"Upload RPC error on initial stub: {e}. Will attempt discovery.")
@@ -163,9 +169,12 @@ def close_file(stub, path, peers_env_key="FILE_SERVICE_PEERS", max_retries=2):
 
     if resp and getattr(resp, "success", False):
         print(f"Upload result: {resp.message}")
-        new_resp = stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=0))
+        new_resp = stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_version=0))
+        new_ver = getattr(new_resp, "server_version", None)
+        if new_ver is None:
+            new_ver = 0
         with open(ts_file, "w") as f:
-            f.write(str(new_resp.server_timestamp))
+            f.write(str(new_ver))
         return
 
     leader_hint = None
@@ -181,9 +190,12 @@ def close_file(stub, path, peers_env_key="FILE_SERVICE_PEERS", max_retries=2):
                 resp2 = leader_stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
                 if getattr(resp2, "success", False):
                     # print(f"Upload result (leader): {resp2.message}")
-                    new_resp = leader_stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=0))
+                    new_resp = leader_stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_version=0))
+                    new_ver = getattr(new_resp, "server_version", None)
+                    if new_ver is None:
+                        new_ver = 0
                     with open(ts_file, "w") as f:
-                        f.write(str(new_resp.server_timestamp))
+                        f.write(str(new_ver))
                     return
             except grpc.RpcError as e:
                 print(f"Upload RPC to hinted leader failed: {e}")
@@ -207,9 +219,12 @@ def close_file(stub, path, peers_env_key="FILE_SERVICE_PEERS", max_retries=2):
 
         if getattr(resp3, "success", False):
             # print(f"Upload succeeded on peer {peer} (leader).")
-            new_resp = peer_stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=0))
+            new_resp = peer_stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_version=0))
+            new_ver = getattr(new_resp, "server_version", None)
+            if new_ver is None:
+                new_ver = 0
             with open(ts_file, "w") as f:
-                f.write(str(new_resp.server_timestamp))
+                f.write(str(new_ver))
             return
         else:
             if getattr(resp3, "message", "") and "NOT_LEADER" in str(resp3.message):
@@ -221,14 +236,19 @@ def close_file(stub, path, peers_env_key="FILE_SERVICE_PEERS", max_retries=2):
                     if hint_stub:
                         try:
                             resp4 = hint_stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
-                            if getattr(resp4, "success", False):
-                                # print(f"Upload succeeded on hinted leader {hint}.")
-                                new_resp = hint_stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_timestamp=0))
-                                with open(ts_file, "w") as f:
-                                    f.write(str(new_resp.server_timestamp))
-                                return
                         except grpc.RpcError as e:
                             print(f"Upload RPC to hinted leader {hint} failed: {e}")
+                            continue
+
+                        if getattr(resp4, "success", False):
+                            # print(f"Upload succeeded on hinted leader {hint}.")
+                            new_resp = hint_stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_version=0))
+                            new_ver = getattr(new_resp, "server_version", None)
+                            if new_ver is None:
+                                new_ver = 0
+                            with open(ts_file, "w") as f:
+                                f.write(str(new_ver))
+                            return
     print("Failed to upload file to leader after trying hints and peers.")
 
 
