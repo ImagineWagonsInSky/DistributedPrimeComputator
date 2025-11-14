@@ -15,6 +15,9 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
     def __init__(self):
         self.meta = load_meta()
 
+        if "file_versions" not in self.meta:
+            self.meta["file_versions"] = {}
+
         self.lock = threading.RLock()
 
         self.server_id = SERVER_ID
@@ -118,7 +121,8 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
         with open(path, "rb") as f:
             data = f.read()
         ts = file_timestamp(path)
-        return file_service_pb2.OpenResponse(success=True, data=data, message="File sent", server_timestamp=ts)
+        ver = self.meta.get("file_versions", {}).get(request.filename, 0)
+        return file_service_pb2.OpenResponse(success=True, data=data, message="File sent", server_timestamp=ts, server_version=ver)
 
     def UploadFile(self, request, context):
         filename = request.filename
@@ -171,7 +175,12 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
         try:
             os.replace(tmp_path, final_path)
             with self.lock:
+                self.meta.setdefault("file_sizes", {})
+                self.meta.setdefault("file_versions", {})
                 self.meta["file_sizes"][filename] = os.path.getsize(final_path)
+                curr_ver = self.meta["file_versions"].get(filename, 0)
+                new_ver = curr_ver + 1
+                self.meta["file_versions"][filename] = new_ver
                 save_meta(self.meta)
         except Exception as e:
             for peer in self.peers:
@@ -183,7 +192,11 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
         for peer in self.peers:
             channel = grpc.insecure_channel(peer)
             stub = file_service_pb2_grpc.FileServiceStub(channel)
-            stub.CommitFile(file_service_pb2.CommitRequest(filename=filename, request_id=request_id), timeout=2)
+            try:
+                stub.CommitFile(file_service_pb2.CommitRequest(filename=filename, request_id=request_id, version=new_ver), timeout=2)
+            except Exception:
+                # best-effort notify; followers missing the commit will be inconsistent until cleanup or next leader action
+                pass
 
         return file_service_pb2.UploadResponse(success=True, message="Uploaded and replicated (committed)")
 
@@ -219,6 +232,14 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
         try:
             os.replace(tmp_path, final_path)
             with self.lock:
+                self.meta.setdefault("file_sizes", {})
+                self.meta.setdefault("file_versions", {})
+                # apply version if provided (idempotent if equal/older)
+                incoming_ver = getattr(request, "version", None)
+                if incoming_ver is not None:
+                    curr = self.meta["file_versions"].get(filename, 0)
+                    if incoming_ver >= curr:
+                        self.meta["file_versions"][filename] = incoming_ver
                 self.meta["file_sizes"][filename] = os.path.getsize(final_path)
                 save_meta(self.meta)
             return file_service_pb2.CommitResponse(success=True, message="committed")
@@ -241,12 +262,17 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
     def TestAuth(self, request, context):
         path = os.path.join(DATA_DIR, request.filename)
         if not os.path.exists(path):
-            return file_service_pb2.TestAuthResponse(valid=False, message="File not found", server_timestamp=0)
-        server_ts = file_timestamp(path)
-        if server_ts == request.client_timestamp:
-            return file_service_pb2.TestAuthResponse(valid=True, message="Cache Valid", server_timestamp=server_ts)
-        else: 
-            return file_service_pb2.TestAuthResponse(valid=False, message="Cache outdated", server_timestamp=server_ts)
+            return file_service_pb2.TestAuthResponse(valid=False, message="File not found", server_version=0)
+        # Only use logical version for TestAuth now
+        server_ver = self.meta.get("file_versions", {}).get(request.filename, 0)
+        client_ver = getattr(request, "client_version", None)
+        if client_ver is None:
+            return file_service_pb2.TestAuthResponse(valid=False, message="No client_version provided", server_version=server_ver)
+
+        if client_ver == server_ver:
+            return file_service_pb2.TestAuthResponse(valid=True, message="Cache Valid", server_version=server_ver)
+        else:
+            return file_service_pb2.TestAuthResponse(valid=False, message="Cache outdated", server_version=server_ver)
     
     def ListFiles(self, request, context):
         

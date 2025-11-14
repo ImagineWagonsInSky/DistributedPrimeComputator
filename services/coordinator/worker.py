@@ -132,11 +132,11 @@ class Worker():
             print(f"Error: Local cache file not found at {local_file}")
             return []
         
-        finally:
-            try:
-                client.close_file(self.filesystem_stub, local_path)
-            except grpc.RpcError as e:
-                print(f"gRPC error when trying to close file: {e.details()}")
+        # finally:
+        #     try:
+        #         client.close_file(self.filesystem_stub, local_path)
+        #     except grpc.RpcError as e:
+        #         print(f"gRPC error when trying to close file: {e.details()}")
 
         # Preserved chunks in case of coordinator failture.
         self.preserved_chunks.update({"Task" : task, "preserved_primes" : primes_found})

@@ -44,6 +44,7 @@ message OpenResponse {
   bytes data = 2;
   string message = 3;
   int64 server_timestamp = 4;
+  uint64 server_version = 5;
 }
 
 message UploadRequest {
@@ -60,13 +61,13 @@ message UploadResponse {
 
 message TestAuthRequest {
   string filename = 1;
-  int64 client_timestamp = 2; // client's cached timestamp
+  uint64 client_version = 2;
 }
 
 message TestAuthResponse {
   bool valid = 1; // true if cache is still good
   string message = 2;
-  int64 server_timestamp = 3;
+  uint64 server_version = 3;
 }
 
 message FileTuple {
@@ -123,6 +124,7 @@ message CleanupTempResponse {
 message CommitRequest {
   string filename = 1;
   string request_id = 2;
+  uint64 version = 3;
 }
 
 message CommitResponse {
