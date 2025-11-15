@@ -400,7 +400,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
             
             for wid in failed_workers:
                 # Add tasks back to queue
-                print(f"Added back task to taskqueue from Worker {wid}")
+                print(f"Checked if task from {wid} should be add back to task_queue")
                 task_to_requeue = None 
                 for task_id, (task, assigned_wid) in self.tasks_in_progress.items():
                     if wid == assigned_wid:
@@ -408,16 +408,16 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
                 if task_to_requeue:
                     filename = task_to_requeue[1]
                     # TODO: WILL PROB BREAK
-                    print(f"BEFORE added back to taskqueue from Worker {self.task_queues.get(filename, [])}")
+                    print(f"BEFORE being added back to taskqueue {self.task_queues.get(filename, [])}")
                     task_queue = self.task_queues.get(filename, [])
                     task_queue.append(task)
                     self.task_queues[filename] = task_queue
-                    print(f"AFTER added back taskqueue from Worker {self.task_queues.get(filename, [])}")
+                    print(f"AFTER being added back taskqueue {self.task_queues.get(filename, [])}")
                     # Clean up scheduling data structures
                     del self.tasks_in_progress[task_to_requeue[0]]
-                    self.active_workers.remove(wid)
-                    del self.worker_affinity[wid]
-                    del self.last_heartbeat[wid]
+                self.active_workers.remove(wid)
+                del self.worker_affinity[wid]
+                del self.last_heartbeat[wid]
 
     def _start_heartbeat_monitor(self):
         threading.Timer(0.5, self._heartbeat_check).start()
