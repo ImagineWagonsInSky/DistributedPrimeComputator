@@ -12,7 +12,8 @@ service Coordinator {
     // Worker calls this to send its saved state
     rpc SubmitSnapshotChunk(SnapshotChunk) returns (google.protobuf.Empty) {};
     // Heartbeats
-    rpc Heartbeat(stream HeartbeatRequest) returns (google.protobuf.Empty) {};
+    // Bidirectional RPC so we aren't forced to reply at close
+    rpc Heartbeat(stream HeartbeatRequest) returns (stream HeartbeatResponse) {};
 }
 
 message WorkResponse {
@@ -48,4 +49,7 @@ message SnapshotChunk {
 
 message HeartbeatRequest {
     string worker_id = 1;
+}
+
+message HeartbeatResponse {
 }

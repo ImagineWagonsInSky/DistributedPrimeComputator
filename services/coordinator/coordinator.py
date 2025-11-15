@@ -9,6 +9,7 @@ import os
 import argparse
 import uuid
 import pickle
+import time
 
 from services.file_service import client
 
@@ -67,6 +68,11 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         print("Coordinator initialized")
         self._initiate_snapshot()
         self._start_snapshot_timer()
+
+        # --- HEARTBEAT STATE ---
+        self.last_heartbeat = {}
+        self.HEARTBEAT_TIMEOUT = 15.0
+        self._start_heartbeat_monitor()
 
     def _populate_queues(self):
         """
@@ -144,7 +150,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
                     start_line=start_line,
                     num_lines=num_lines,
                     snapshot_id = self.current_snapshot_id,
-                    task_id = ""
+                    task_id = task_id
                 )
             
             return coordinator_pb2.WorkResponse(no_more_work=True, filename="", start_line=0, num_lines=0, task_id = "", snapshot_id = self.current_snapshot_id)
@@ -158,7 +164,12 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         # Record channel if the snapshot is active and we are currently recording messages from this worker (== "PENDING") 
         with self.snapshot_lock:
             if self.current_snapshot_id and self.workers_in_snapshot.get(worker_id) == "PENDING":
-                self.pending_snapshot["in_flight_messages"][worker_id].append(request)
+                request_dict = {
+                    "primes": list(request.primes), 
+                    "worker_id": request.worker_id,
+                    "task_id": request.task_id
+                }
+                self.pending_snapshot["in_flight_messages"][worker_id].append(request_dict)
 
         with self.primes_lock:
             new_primes = []
@@ -321,7 +332,12 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
             # Reprocess all in flight messages
             for worker_id, messages in snapshot_data["in_flight_messages"].items():
                 for msg in messages:
-                    self.SubmitPrimeBatch(msg, None)
+                    msg_request = coordinator_pb2.SubmitBatchRequest(
+                        primes=msg["primes"],
+                        worker_id=msg["worker_id"],
+                        task_id=msg["task_id"]
+                    ) 
+                    self.SubmitPrimeBatch(msg_request, None)
 
             print("SNAPSHOT LOADED SUCCESSFULLY")
             return True
@@ -346,26 +362,69 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
                 return True
         return False
     
-    def HeartBeat(self, request_iterator, context):
+    def Heartbeat(self, request_iterator, context):
         worker_id = None
         try:
             for heartbeat in request_iterator:
                 worker_id = heartbeat.worker_id
-                
-                # need lock here?
-                self.active_workers.add(worker_id)
-            
-            if worker_id:
-                self.active_workers.remove(worker_id)
+                self._handle_heartbeat(worker_id)
 
         except grpc.RpcError as e:
             print(f"Worker {worker_id}'s Heartbeat stream failed ")
-        return google.protobuf.empty_pb2.Empty()
+        # TODO: finally:
+        #     # Is this not handldeed by heartbeat_check
+        #     pass 
+        
+        # Need to 
+        yield from []
+        # return google.protobuf.empty_pb2.Empty()
     
-    def _handle_heartbeat(self):
+    def _handle_heartbeat(self, worker_id):
         # Move to tasks in progress back to the main queue.
         # clean up some other attributes
-        pass
+        current_time = time.time()
+        with self.task_queues_lock:
+            self.last_heartbeat[worker_id] = current_time
+            self.active_workers.add(worker_id)
+
+    def _failed_worker_check(self):
+        current_time = time.time()
+
+        with self.task_queues_lock:
+            failed_workers = []
+            for wid, last_heartbeat in self.last_heartbeat.items():
+                # If time exceeds heartbeat timeout
+                if current_time - last_heartbeat > self.HEARTBEAT_TIMEOUT:
+                    print(f"Haven't received recent heartbeat from Worker {wid}")
+                    failed_workers.append(wid)
+            
+            for wid in failed_workers:
+                # Add tasks back to queue
+                print(f"Added back task to taskqueue from Worker {wid}")
+                task_to_requeue = None 
+                for task_id, (task, assigned_wid) in self.tasks_in_progress.items():
+                    if wid == assigned_wid:
+                        task_to_requeue = (task_id, task)
+                if task_to_requeue:
+                    filename = task_to_requeue[1]
+                    # TODO: WILL PROB BREAK
+                    print(f"BEFORE added back to taskqueue from Worker {self.task_queues.get(filename, [])}")
+                    task_queue = self.task_queues.get(filename, [])
+                    task_queue.append(task)
+                    self.task_queues[filename] = task_queue
+                    print(f"AFTER added back taskqueue from Worker {self.task_queues.get(filename, [])}")
+                    # Clean up scheduling data structures
+                    del self.tasks_in_progress[task_to_requeue[0]]
+                    self.active_workers.remove(wid)
+                    del self.worker_affinity[wid]
+                    del self.last_heartbeat[wid]
+
+    def _start_heartbeat_monitor(self):
+        threading.Timer(0.5, self._heartbeat_check).start()
+    
+    def _heartbeat_check(self):
+        self._failed_worker_check()
+        self._start_heartbeat_monitor()
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
