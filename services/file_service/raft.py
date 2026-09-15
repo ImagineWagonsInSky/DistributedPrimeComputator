@@ -1,10 +1,12 @@
 import grpc
 from concurrent import futures
+import os
 import threading
 import time
 import random
 
 from proto.generated.file_service import file_service_pb2
+from .utils import DATA_DIR
 
 # Election and heartbeat timing. All timers use time.monotonic(): a wall-clock jump
 # (NTP correction, host suspend) must not trigger or suppress elections.
@@ -15,6 +17,7 @@ HEARTBEAT_INTERVAL = 1.0
 HEARTBEAT_RPC_TIMEOUT = 0.5
 VOTE_RPC_TIMEOUT = 1.0
 TIMER_TICK = 0.05
+SYNC_RPC_TIMEOUT = 10.0
 
 
 class RaftManager:
@@ -30,6 +33,8 @@ class RaftManager:
         self._inflight_lock = threading.Lock()
         # peers whose last heartbeat failed, only used to avoid logging every second
         self._unreachable = set()
+        # followers currently being brought up to date
+        self._syncing = set()
 
     def start(self):
         with self.serv.lock:
@@ -99,6 +104,11 @@ class RaftManager:
             if votes >= majority:
                 self.serv.role = "leader"
                 self.serv.leader_host = self.serv.advertise_addr
+                # We may hold an upload the old leader committed without telling us. We won
+                # because no majority has anything newer, so commit it ourselves.
+                if self.serv.pending:
+                    print(f"[Leader] {self.serv.server_id} committing pending upload at index {self.serv.pending['index']}")
+                    self.serv.apply_pending()
                 self.serv.persist()
                 print(f"[Leader] {self.serv.server_id} WON elected leader (term {proposed_term}, votes={votes})")
                 # assert leadership immediately instead of waiting for the next interval
@@ -113,7 +123,10 @@ class RaftManager:
         round was overtaken by a newer term or leader."""
         votes = 1
         majority = (self.serv.cluster_size // 2) + 1
-        req = file_service_pb2.VoteRequest(term=term, candidate_id=self.serv.server_id, pre_vote=pre_vote)
+        with self.serv.lock:
+            last_term, last_index = self.serv.last_entry()
+        req = file_service_pb2.VoteRequest(term=term, candidate_id=self.serv.server_id, pre_vote=pre_vote,
+                                           last_term=last_term, last_index=last_index)
         pending = [self.pool.submit(self._request_vote, peer, stub, req)
                    for peer, stub in self.serv.peer_stubs.items()]
 
@@ -158,7 +171,10 @@ class RaftManager:
                 if self.serv.role != "leader":
                     continue
                 term = self.serv.current_term
-                req = file_service_pb2.HeartbeatRequest(leader_id=self.serv.advertise_addr, term=term)
+                commit = (self.serv.commit_term, self.serv.commit_index)
+                req = file_service_pb2.HeartbeatRequest(
+                    leader_id=self.serv.advertise_addr, term=term,
+                    leader_commit_term=commit[0], leader_commit_index=commit[1])
 
             # Fire all heartbeats concurrently without waiting on any of them
             for peer, stub in self.serv.peer_stubs.items():
@@ -167,9 +183,9 @@ class RaftManager:
                         continue
                     self._inflight.add(peer)
                 fut = stub.Heartbeat.future(req, timeout=HEARTBEAT_RPC_TIMEOUT)
-                fut.add_done_callback(lambda f, p=peer, t=term: self._on_heartbeat_reply(p, t, f))
+                fut.add_done_callback(lambda f, p=peer, t=term, c=commit: self._on_heartbeat_reply(p, t, c, f))
 
-    def _on_heartbeat_reply(self, peer, term, fut):
+    def _on_heartbeat_reply(self, peer, term, commit, fut):
         with self._inflight_lock:
             self._inflight.discard(peer)
         try:
@@ -184,8 +200,55 @@ class RaftManager:
             self._unreachable.discard(peer)
             print(f"[Leader:{self.serv.server_id}] {peer} is reachable again")
 
+        # The heartbeat carried our commit point, so a follower reporting anything else is missing uploads
+        if resp.ok and (resp.commit_term, resp.commit_index) != commit:
+            self._start_sync(peer)
+
         if not resp.ok and resp.term > term:
             with self.serv.lock:
                 if resp.term > self.serv.current_term:
                     print(f"[Leader:{self.serv.server_id}] stepping down: {peer} has higher term {resp.term}")
                     self.serv.step_down(resp.term)
+
+    def _start_sync(self, peer):
+        with self._inflight_lock:
+            if peer in self._syncing:
+                return
+            self._syncing.add(peer)
+        self.pool.submit(self._sync_follower, peer)
+
+    def _sync_follower(self, peer):
+        """Bring a follower that missed uploads up to date: send it every file whose version
+        differs from ours, then our commit point."""
+        stub = self.serv.peer_stubs[peer]
+        try:
+            remote = stub.GetFileVersions(file_service_pb2.FileVersionsRequest(), timeout=SYNC_RPC_TIMEOUT)
+            # Copy our state under the upload lock so no commit lands halfway through
+            with self.serv.upload_lock, self.serv.lock:
+                if self.serv.role != "leader":
+                    return
+                term = self.serv.current_term
+                commit_index, commit_term = self.serv.commit_index, self.serv.commit_term
+                versions = {name: ver for name, ver in self.serv.meta["file_versions"].items()
+                            if remote.versions.get(name, 0) != ver}
+                files = {}
+                for name in versions:
+                    with open(os.path.join(DATA_DIR, name), "rb") as f:
+                        files[name] = f.read()
+
+            print(f"[Leader:{self.serv.server_id}] syncing {peer} from index {remote.commit_index} "
+                  f"to {commit_index}: sending {len(files)} file(s)")
+            for name, data in files.items():
+                resp = stub.InstallFile(file_service_pb2.InstallFileRequest(
+                    term=term, filename=name, data=data, version=versions[name]), timeout=SYNC_RPC_TIMEOUT)
+                if not resp.success:
+                    return
+            stub.FinishSync(file_service_pb2.FinishSyncRequest(
+                term=term, commit_index=commit_index, commit_term=commit_term), timeout=SYNC_RPC_TIMEOUT)
+        except grpc.RpcError as e:
+            print(f"[Leader:{self.serv.server_id}] sync of {peer} failed: {e.code().name}")
+        except Exception as e:
+            print(f"[Leader:{self.serv.server_id}] sync of {peer} failed: {e}")
+        finally:
+            with self._inflight_lock:
+                self._syncing.discard(peer)

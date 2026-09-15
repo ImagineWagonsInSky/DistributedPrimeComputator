@@ -20,6 +20,11 @@ service FileService {
   rpc CleanupTemp(CleanupTempRequest) returns (CleanupTempResponse);
   rpc CommitFile(CommitRequest) returns (CommitResponse);
 
+  // Leader brings a follower that missed uploads up to date
+  rpc GetFileVersions(FileVersionsRequest) returns (FileVersionsResponse);
+  rpc InstallFile(InstallFileRequest) returns (InstallFileResponse);
+  rpc FinishSync(FinishSyncRequest) returns (FinishSyncResponse);
+
   //Subdivision files creation and replication
   rpc RequestSubdivisions(RequestDivision) returns (RequestDivisionResponse);
   rpc ReplicateSubdivisions(ReplicateDivision) returns (ReplicateDivisionResponse);
@@ -89,22 +94,37 @@ message ReplicateRequest {
   string filename = 1;
   bytes data = 2;
   string request_id = 3;
+  // Where this upload sits in the commit sequence, plus the leader's last commit so a
+  // follower can apply a commit it missed and tell when it has fallen behind
+  uint64 term = 4;
+  uint64 index = 5;
+  uint64 version = 6;
+  uint64 leader_commit_index = 7;
+  uint64 leader_commit_term = 8;
 }
 
 message HeartbeatRequest {
   string leader_id = 1;
   uint64 term = 2;
+  uint64 leader_commit_index = 3;
+  uint64 leader_commit_term = 4;
 }
 
 message HeartbeatResponse {
   bool ok = 1;
   uint64 term = 2;
+  // follower's commit point, so the leader can tell if it needs syncing
+  uint64 commit_index = 3;
+  uint64 commit_term = 4;
 }
 
 message VoteRequest {
   uint64 term = 1;
   string candidate_id = 2;
   bool pre_vote = 3; // "would you vote for me?" probe; the voter changes no state
+  // candidate's newest upload; voters refuse candidates with less data than themselves
+  uint64 last_index = 4;
+  uint64 last_term = 5;
 }
 
 message VoteResponse {
@@ -126,6 +146,7 @@ message CommitRequest {
   string filename = 1;
   string request_id = 2;
   uint64 version = 3;
+  uint64 index = 4;
 }
 
 message CommitResponse {
@@ -156,4 +177,35 @@ message ListSubdivisionFilesRequest {
 
 message ListSubdivisionFilesResponse {
   repeated FileTuple files = 1;
+}
+
+message FileVersionsRequest {}
+
+message FileVersionsResponse {
+  map<string, uint64> versions = 1;
+  uint64 commit_index = 2;
+  uint64 commit_term = 3;
+}
+
+message InstallFileRequest {
+  uint64 term = 1;
+  string filename = 2;
+  bytes data = 3;
+  uint64 version = 4;
+}
+
+message InstallFileResponse {
+  bool success = 1;
+  uint64 term = 2;
+}
+
+message FinishSyncRequest {
+  uint64 term = 1;
+  uint64 commit_index = 2;
+  uint64 commit_term = 3;
+}
+
+message FinishSyncResponse {
+  bool success = 1;
+  uint64 term = 2;
 }

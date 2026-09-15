@@ -72,7 +72,8 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         """
         self.task_queues = {}
         # If the files have reasonable size
-        filename_list = self.filesystem_stub.ListFiles(file_service_pb2.ListFilesRequest())
+        # Retried because file servers refuse reads until a leader confirms they are up to date
+        filename_list = client._rpc_retry(self.filesystem_stub.ListFiles, file_service_pb2.ListFilesRequest())
 
         # if (self.check_subdivision_need(filename_list)):
         #     # Wait for subdivisions to get created, not sure how to do that yet

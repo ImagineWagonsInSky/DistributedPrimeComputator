@@ -54,6 +54,9 @@ Each component reads its configuration from environment variables (set in `docke
 | `ADVERTISE_ADDR`    | `localhost:<RPC_PORT>` | (file servers) Address other containers reach this server on; handed to clients as the leader hint |
 
 The file servers elect their leader with Raft (pre-vote enabled), so no server is configured as leader.
+Every committed upload gets the next index in a cluster-wide sequence. A server that missed uploads
+(e.g. it was down) is synced by the leader on its next heartbeat, refuses reads until then, and cannot
+win an election, since servers only vote for candidates holding every upload they hold.
 
 In local (non-Docker) runs, these default to `localhost` and can be overridden with `--env`.
 
