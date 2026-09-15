@@ -49,6 +49,11 @@ Each component reads its configuration from environment variables (set in `docke
 | `FILE_SERVICE_PORT` | `50051`        | It's default port               |
 | `COORDINATOR_HOST`  | `coordinator`  | Hostname of the coordinator container  |
 | `COORDINATOR_PORT`  | `50052`        | Coordinator gRPC port                  |
+| `FILE_SERVICE_PEERS` | —             | Every file server; the coordinator and workers fail over across them when one is down |
+| `PEERS`             | —              | (file servers) The other file servers in the Raft cluster |
+| `ADVERTISE_ADDR`    | `localhost:<RPC_PORT>` | (file servers) Address other containers reach this server on; handed to clients as the leader hint |
+
+The file servers elect their leader with Raft (pre-vote enabled), so no server is configured as leader.
 
 In local (non-Docker) runs, these default to `localhost` and can be overridden with `--env`.
 

@@ -8,7 +8,7 @@ services:
       - RPC_HOST=0.0.0.0
       - RPC_PORT=50051
       - SERVER_ID=server-1
-      - IS_LEADER=true
+      - ADVERTISE_ADDR=file_service_1:50051
       - PEERS=file_service_2:50054,file_service_3:50053,file_service_4:50055
     ports:
       - "50051:50051"
@@ -23,9 +23,9 @@ services:
     environment:
       - ROLE=file_service
       - SERVER_ID=server-2
-      - IS_LEADER=false
       - RPC_HOST=0.0.0.0
       - RPC_PORT=50054
+      - ADVERTISE_ADDR=file_service_2:50054
       - PEERS=file_service_1:50051,file_service_3:50053,file_service_4:50055
     ports:
       - "50054:50054"
@@ -40,9 +40,9 @@ services:
     environment:
       - ROLE=file_service
       - SERVER_ID=server-3
-      - IS_LEADER=false
       - RPC_HOST=0.0.0.0
       - RPC_PORT=50053
+      - ADVERTISE_ADDR=file_service_3:50053
       - PEERS=file_service_1:50051,file_service_2:50054,file_service_4:50055
     ports:
       - "50053:50053"
@@ -57,9 +57,9 @@ services:
     environment:
       - ROLE=file_service
       - SERVER_ID=server-4
-      - IS_LEADER=false
       - RPC_HOST=0.0.0.0
       - RPC_PORT=50055
+      - ADVERTISE_ADDR=file_service_4:50055
       - PEERS=file_service_1:50051,file_service_2:50054,file_service_3:50053
     ports:
       - "50055:50055"

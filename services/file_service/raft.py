@@ -4,164 +4,188 @@ import threading
 import time
 import random
 
-from proto.generated.file_service import file_service_pb2, file_service_pb2_grpc
-from .utils import save_meta
+from proto.generated.file_service import file_service_pb2
 
-# Election and heartbeat timing
+# Election and heartbeat timing. All timers use time.monotonic(): a wall-clock jump
+# (NTP correction, host suspend) must not trigger or suppress elections.
 ELECTION_TIMEOUT = (3.0, 7.0)
 HEARTBEAT_INTERVAL = 1.0
+# Per-RPC deadlines. These must stay well below the election timeout so a dead or hung
+# peer can never delay the leader's heartbeats to the healthy ones.
+HEARTBEAT_RPC_TIMEOUT = 0.5
+VOTE_RPC_TIMEOUT = 1.0
+TIMER_TICK = 0.05
 
 
 class RaftManager:
     def __init__(self, serv):
-        # serv is the FileServiceServicer instance
+        # serv is the FileServiceServicer instance; its lock guards all raft state
         self.serv = serv
+        self.pool = futures.ThreadPoolExecutor(max_workers=max(4, 2 * len(serv.peers)))
+        self.election_deadline = time.monotonic() + random.uniform(*ELECTION_TIMEOUT)
+        self.last_leader_contact = float("-inf")
+        self._wake_heartbeats = threading.Event()
+        # peers with a heartbeat RPC still outstanding, so a slow peer never piles up calls
+        self._inflight = set()
+        self._inflight_lock = threading.Lock()
+        # peers whose last heartbeat failed, only used to avoid logging every second
+        self._unreachable = set()
+
+    def start(self):
+        with self.serv.lock:
+            self.reset_election_timer()
+        threading.Thread(target=self.election_timer, daemon=True).start()
+        threading.Thread(target=self.heartbeat_loop, daemon=True).start()
+
+    def reset_election_timer(self):
+        """Push the election deadline out by a fresh random timeout. Caller should hold serv.lock."""
+        self.election_deadline = time.monotonic() + random.uniform(*ELECTION_TIMEOUT)
+
+    def heard_from_leader(self):
+        """Record a valid heartbeat from the current leader. Caller should hold serv.lock."""
+        self.last_leader_contact = time.monotonic()
+        self.reset_election_timer()
+
+    def leader_recently_seen(self):
+        """True if this node is the leader or heard from one within the minimum election timeout.
+        Caller should hold serv.lock."""
+        return (self.serv.role == "leader"
+                or time.monotonic() - self.last_leader_contact < ELECTION_TIMEOUT[0])
 
     def election_timer(self):
-        # small startup jitter
-        initial_jitter = random.uniform(0.0, 1.0)
-        time.sleep(initial_jitter)
         while True:
-            timeout = random.uniform(*ELECTION_TIMEOUT)
-            start = time.time()
+            time.sleep(TIMER_TICK)
+            with self.serv.lock:
+                if self.serv.role == "leader":
+                    self.reset_election_timer()
+                    continue
+                if time.monotonic() < self.election_deadline:
+                    continue
+                # if this round fails or splits, the timer retries after a new random timeout
+                self.reset_election_timer()
+            self.hold_election()
 
-            while time.time() - start < timeout:
-                with self.serv.lock:
-                    if time.time() - self.serv.last_heartbeat < timeout:
-                        break
-                time.sleep(0.05)
-            else:
-                with self.serv.lock:
-                    if self.serv.role == "leader":
-                        continue
-                self.start_election()
-
-    def start_election(self):
-        with self.serv.lock:
-            self.serv.current_term += 1
-            self.serv.role = "candidate"
-            self.serv.voted_for = self.serv.server_id
-            self.serv.meta["term"] = self.serv.current_term
-            self.serv.meta["voted_for"] = self.serv.voted_for
-            try:
-                save_meta(self.serv.meta)
-            except Exception:
-                pass
-            term = self.serv.current_term
-
-        votes = 1
-        print(f"[Election] {self.serv.server_id} starting election for term {term}")
-
+    def hold_election(self):
         majority = (self.serv.cluster_size // 2) + 1
 
-        def contact_peer(p):
-            for attempt in range(2):
-                try:
-                    ch = grpc.insecure_channel(p)
-                    try:
-                        grpc.channel_ready_future(ch).result(timeout=0.8)
-                    except Exception:
-                        time.sleep(0.05 + random.uniform(0, 0.05))
-                        continue
-                    stub = file_service_pb2_grpc.FileServiceStub(ch)
-                    try:
-                        return stub.RequestVote(file_service_pb2.VoteRequest(term=term, candidate_id=self.serv.server_id), timeout=1.5)
-                    except Exception:
-                        time.sleep(0.05)
-                        continue
-                except Exception:
-                    time.sleep(0.05)
-                    continue
-            return None
-
-        futures_map = {}
-        with futures.ThreadPoolExecutor(max_workers=max(1, len(self.serv.peers))) as exc:
-            for peer in self.serv.peers:
-                futures_map[exc.submit(contact_peer, peer)] = peer
-
-            try:
-                done, not_done = futures.wait(list(futures_map.keys()), timeout=3)
-            except Exception:
-                done = set()
-                not_done = set(futures_map.keys())
-
-            remaining_possible = len(self.serv.peers)
-            for fut in done:
-                peer = futures_map.get(fut)
-                remaining_possible -= 1
-                try:
-                    resp = fut.result()
-                except Exception as e:
-                    print(f"[Election] contacting {peer} raised: {e}")
-                    resp = None
-
-                if resp is None:
-                    print(f"[Election] no response from {peer}")
-                else:
-                    if getattr(resp, 'term', None) is not None and resp.term > term:
-                        with self.serv.lock:
-                            self.serv.current_term = resp.term
-                            self.serv.role = 'follower'
-                            self.serv.voted_for = None
-                            self.serv.meta['term'] = self.serv.current_term
-                            self.serv.meta['voted_for'] = self.serv.voted_for
-                            try:
-                                save_meta(self.serv.meta)
-                            except Exception:
-                                pass
-                        print(f"[Election] stepping down: peer {peer} has higher term {resp.term}")
-                        return
-                    if resp.vote_granted:
-                        votes += 1
-                        print(f"[Election] received vote from {peer} (term={resp.term})")
-                    else:
-                        print(f"[Election] vote denied by {peer} (term={resp.term})")
-
-                if votes >= majority:
-                    break
-
-            for fut in not_done:
-                peer = futures_map.get(fut)
-                remaining_possible -= 1
-                fut.cancel()
-                print(f"[Election] peer {peer} did not respond in time and will be treated as unreachable")
+        # Pre-vote: check a majority would vote for us before bumping our term. Peers refuse
+        # while they still hear from a leader, so a node that only lost contact itself (e.g. it
+        # just rejoined) can't force the cluster into a new term and depose a healthy leader.
+        with self.serv.lock:
+            proposed_term = self.serv.current_term + 1
+            asked_at = time.monotonic()
+        pre_votes = self._gather_votes(proposed_term, pre_vote=True)
+        if pre_votes < majority:
+            print(f"[PreVote] {self.serv.server_id} has no majority for term {proposed_term} "
+                  f"(votes={pre_votes}), staying follower")
+            return
 
         with self.serv.lock:
-            if votes >= majority and self.serv.current_term == term and self.serv.role == "candidate":
+            # a leader may have appeared or our term moved while we were asking
+            if (self.serv.role == "leader" or self.serv.current_term + 1 != proposed_term
+                    or self.last_leader_contact > asked_at):
+                return
+            self.serv.current_term = proposed_term
+            self.serv.role = "candidate"
+            self.serv.voted_for = self.serv.server_id
+            self.serv.persist()
+        print(f"[Election] {self.serv.server_id} starting election for term {proposed_term}")
+
+        votes = self._gather_votes(proposed_term, pre_vote=False)
+
+        with self.serv.lock:
+            if self.serv.current_term != proposed_term or self.serv.role != "candidate":
+                return
+            if votes >= majority:
                 self.serv.role = "leader"
-                # Use RPC env variables for advertised leader address if available
-                try:
-                    import os
-                    rpc_addr = f"{os.getenv('RPC_HOST', '0.0.0.0')}:{os.getenv('RPC_PORT', '50051')}"
-                except Exception:
-                    rpc_addr = None
-                self.serv.leader_host = rpc_addr or self.serv.leader_host or self.serv.server_id
-                self.serv.meta["last_leader"] = self.serv.leader_host
-                try:
-                    save_meta(self.serv.meta)
-                except Exception:
-                    pass
-                print(f"[Leader] {self.serv.server_id} WON elected leader (term {term})")
-                threading.Thread(target=self.send_heartbeats, daemon=True).start()
+                self.serv.leader_host = self.serv.advertise_addr
+                self.serv.persist()
+                print(f"[Leader] {self.serv.server_id} WON elected leader (term {proposed_term}, votes={votes})")
+                # assert leadership immediately instead of waiting for the next interval
+                self._wake_heartbeats.set()
             else:
-                print(f"[Election] {self.serv.server_id} lost election (votes={votes})")
+                print(f"[Election] {self.serv.server_id} lost election for term {proposed_term} (votes={votes})")
                 self.serv.role = "follower"
 
-    def send_heartbeats(self):
+    def _gather_votes(self, term, pre_vote):
+        """Ask every peer for its vote in term. Returns the vote count including our own, stopping
+        as soon as there is a majority rather than waiting on unreachable peers. Returns 0 if the
+        round was overtaken by a newer term or leader."""
+        votes = 1
+        majority = (self.serv.cluster_size // 2) + 1
+        req = file_service_pb2.VoteRequest(term=term, candidate_id=self.serv.server_id, pre_vote=pre_vote)
+        pending = [self.pool.submit(self._request_vote, peer, stub, req)
+                   for peer, stub in self.serv.peer_stubs.items()]
+
+        try:
+            for fut in futures.as_completed(pending, timeout=VOTE_RPC_TIMEOUT + 0.5):
+                if votes >= majority:
+                    break
+                peer, resp = fut.result()
+                if resp is None:
+                    continue
+                with self.serv.lock:
+                    if resp.term > self.serv.current_term:
+                        print(f"[Election] peer {peer} has higher term {resp.term}, adopting it as follower")
+                        self.serv.step_down(resp.term)
+                        return 0
+                    if not pre_vote and (self.serv.role != "candidate" or self.serv.current_term != term):
+                        # another leader's heartbeat or a newer election overtook us
+                        return 0
+                if resp.vote_granted:
+                    votes += 1
+                    if not pre_vote:
+                        print(f"[Election] received vote from {peer} (term={resp.term})")
+                elif not pre_vote:
+                    print(f"[Election] vote denied by {peer} (term={resp.term})")
+        except futures.TimeoutError:
+            pass
+        return votes
+
+    def _request_vote(self, peer, stub, req):
+        try:
+            return peer, stub.RequestVote(req, timeout=VOTE_RPC_TIMEOUT)
+        except grpc.RpcError as e:
+            if not req.pre_vote:
+                print(f"[Election] no response from {peer}: {e.code().name}")
+            return peer, None
+
+    def heartbeat_loop(self):
         while True:
-            print(f"I am {self.serv.server_id} and am I leader? {self.serv.role} and I think that {self.serv.leader_host} is the leader")
+            self._wake_heartbeats.wait(HEARTBEAT_INTERVAL)
+            self._wake_heartbeats.clear()
             with self.serv.lock:
                 if self.serv.role != "leader":
-                    break
+                    continue
                 term = self.serv.current_term
-                leader_id = self.serv.leader_host or self.serv.server_id
-            for peer in self.serv.peers:
-                try:
-                    channel = grpc.insecure_channel(peer)
-                    stub = file_service_pb2_grpc.FileServiceStub(channel)
-                    stub.Heartbeat(file_service_pb2.HeartbeatRequest(
-                        leader_id=leader_id, term=term
-                    ))
-                except Exception as e:
-                    print(f"[Leader:{self.serv.server_id}] heartbeat to {peer} failed: {e}")
-            time.sleep(HEARTBEAT_INTERVAL)
+                req = file_service_pb2.HeartbeatRequest(leader_id=self.serv.advertise_addr, term=term)
+
+            # Fire all heartbeats concurrently without waiting on any of them
+            for peer, stub in self.serv.peer_stubs.items():
+                with self._inflight_lock:
+                    if peer in self._inflight:
+                        continue
+                    self._inflight.add(peer)
+                fut = stub.Heartbeat.future(req, timeout=HEARTBEAT_RPC_TIMEOUT)
+                fut.add_done_callback(lambda f, p=peer, t=term: self._on_heartbeat_reply(p, t, f))
+
+    def _on_heartbeat_reply(self, peer, term, fut):
+        with self._inflight_lock:
+            self._inflight.discard(peer)
+        try:
+            resp = fut.result()
+        except grpc.RpcError as e:
+            if peer not in self._unreachable:
+                self._unreachable.add(peer)
+                print(f"[Leader:{self.serv.server_id}] heartbeat to {peer} failed: {e.code().name}")
+            return
+
+        if peer in self._unreachable:
+            self._unreachable.discard(peer)
+            print(f"[Leader:{self.serv.server_id}] {peer} is reachable again")
+
+        if not resp.ok and resp.term > term:
+            with self.serv.lock:
+                if resp.term > self.serv.current_term:
+                    print(f"[Leader:{self.serv.server_id}] stepping down: {peer} has higher term {resp.term}")
+                    self.serv.step_down(resp.term)

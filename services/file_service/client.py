@@ -1,7 +1,68 @@
 import grpc
 from proto.generated.file_service import file_service_pb2, file_service_pb2_grpc
 import os
+import threading
 import time
+
+MAX_RETRY_BACKOFF = 4.0
+# How long close_file keeps retrying while there is no leader. Must outlast an election
+# (3-7s election timeout plus a round of voting), e.g. at startup or after the leader dies.
+UPLOAD_RETRY_WINDOW = 20.0
+# Deadline for calls through FailoverStub, so a hung server fails over instead of blocking forever
+FAILOVER_RPC_TIMEOUT = 15.0
+FAILOVER_CODES = (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED)
+
+CHANNEL_OPTIONS = [
+    ("grpc.max_send_message_length", -1),
+    ("grpc.max_receive_message_length", -1),
+    ("grpc.initial_reconnect_backoff_ms", 500),
+    ("grpc.min_reconnect_backoff_ms", 500),
+    ("grpc.max_reconnect_backoff_ms", 2000),
+    ("grpc.dns_min_time_between_resolutions_ms", 500),
+]
+
+
+class FailoverStub:
+    """
+    Drop-in replacement for FileServiceStub that knows every file server.
+    Calls go to the current server; if it is unreachable, the call moves on to the next
+    one in the list and that server becomes the new current one.
+    """
+
+    def __init__(self, addrs, rpc_timeout=FAILOVER_RPC_TIMEOUT):
+        self._addrs = addrs
+        self._stubs = [file_service_pb2_grpc.FileServiceStub(grpc.insecure_channel(a, options=CHANNEL_OPTIONS))
+                       for a in addrs]
+        self._current = 0
+        self._lock = threading.Lock()
+        self._rpc_timeout = rpc_timeout
+
+    def __getattr__(self, method):
+        def call(request, timeout=None, **kwargs):
+            last_err = None
+            for _ in range(len(self._stubs)):
+                idx = self._current
+                try:
+                    return getattr(self._stubs[idx], method)(request, timeout=timeout or self._rpc_timeout, **kwargs)
+                except grpc.RpcError as e:
+                    if e.code() not in FAILOVER_CODES:
+                        raise
+                    last_err = e
+                    with self._lock:
+                        if self._current == idx:
+                            self._current = (idx + 1) % len(self._stubs)
+                            print(f"[failover] {self._addrs[idx]} unreachable ({e.code().name}), "
+                                  f"switching to {self._addrs[self._current]}")
+            raise last_err
+        return call
+
+
+def make_file_service_stub():
+    """FailoverStub over FILE_SERVICE_HOST:PORT first, then the rest of FILE_SERVICE_PEERS."""
+    primary = f"{os.getenv('FILE_SERVICE_HOST', 'localhost')}:{os.getenv('FILE_SERVICE_PORT', '50051')}"
+    peers = [p for p in os.getenv("FILE_SERVICE_PEERS", "").split(",") if p]
+    return FailoverStub([primary] + [p for p in peers if p != primary])
+
 
 def _rpc_retry(call_fn, *args, retries=7, backoff=1.0, retry_codes=None, **kwargs):
     """
@@ -24,7 +85,7 @@ def _rpc_retry(call_fn, *args, retries=7, backoff=1.0, retry_codes=None, **kwarg
             if attempt >= retries or code not in retry_codes:
                 print(f"[rpc_retry] RPC failed, no more retries")
                 raise
-            sleep_for = backoff * (2 ** (attempt - 1))
+            sleep_for = min(backoff * (2 ** (attempt - 1)), MAX_RETRY_BACKOFF)
             print(f"[rpc_retry] RPC {code}, retrying in {sleep_for:.1f}s (attempt {attempt}/{retries})...")
             time.sleep(sleep_for)
     
@@ -139,11 +200,14 @@ def write_primes_to_local(path, primes):
 
     print(f"Local cache for {filename} updated locally")
 
+_stub_cache = {}
+
 def _make_stub(hostport, timeout_connect=0.8):
-    ch = grpc.insecure_channel(hostport, options=[
-        ("grpc.max_send_message_length", -1),
-        ("grpc.max_receive_message_length", -1),
-    ])
+    # Reuse the channel to a known leader rather than opening a new one on every upload
+    ch = _stub_cache.get(hostport)
+    if ch is None:
+        ch = grpc.insecure_channel(hostport, options=CHANNEL_OPTIONS)
+        _stub_cache[hostport] = ch
     try:
         grpc.channel_ready_future(ch).result(timeout=timeout_connect)
         return file_service_pb2_grpc.FileServiceStub(ch)
@@ -160,95 +224,54 @@ def close_file(stub, path, peers_env_key="FILE_SERVICE_PEERS", max_retries=2):
     with open(path, "rb") as f:
         data = f.read()
 
+    print(f"Closing and updating {filename} to server")
+    peers = [p for p in os.environ.get(peers_env_key, "").split(",") if p]
+    deadline = time.time() + UPLOAD_RETRY_WINDOW
+    while True:
+        ok, hint = _upload_to(stub, filename, data, ts_file)
+
+        # Follow leader hints first, then try every known server in case the hint is stale
+        candidates = ([hint] if hint else []) + peers
+        tried = set()
+        while not ok and candidates:
+            addr = candidates.pop(0)
+            if addr in tried:
+                continue
+            tried.add(addr)
+            addr_stub = _make_stub(addr)
+            if addr_stub is None:
+                continue
+            ok, hint = _upload_to(addr_stub, filename, data, ts_file)
+            if hint and hint not in tried:
+                print(f"Redirected to leader {hint}, retrying upload there.")
+                candidates.insert(0, hint)
+
+        if ok:
+            return
+        if time.time() >= deadline:
+            print("Failed to upload file to leader after trying hints and peers.")
+            return
+        print("No leader reachable (election in progress?), retrying upload in 1s")
+        time.sleep(1.0)
+
+
+def _upload_to(stub, filename, data, ts_file):
+    """Try UploadFile on one server. Returns (True, None) once committed, else (False, leader hint or None)."""
     try:
-        print(f"Closing and updating {filename} to server")
         resp = stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
     except grpc.RpcError as e:
-        print(f"Upload RPC error on initial stub: {e}. Will attempt discovery.")
-        resp = None
+        print(f"Upload RPC failed: {e.code().name}")
+        return False, None
 
-    if resp and getattr(resp, "success", False):
+    if resp.success:
         print(f"Upload result: {resp.message}")
         new_resp = stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_version=0))
-        new_ver = getattr(new_resp, "server_version", None)
-        if new_ver is None:
-            new_ver = 0
         with open(ts_file, "w") as f:
-            f.write(str(new_ver))
-        return
-
-    leader_hint = None
-    if resp:
-        if getattr(resp, "message", "") and "NOT_LEADER" in str(resp.message):
-            leader_hint = getattr(resp, "leader_host", None)
-
-    if leader_hint:
-        print(f"Redirected to leader {leader_hint}, retrying upload there.")
-        leader_stub = _make_stub(leader_hint)
-        if leader_stub:
-            try:
-                resp2 = leader_stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
-                if getattr(resp2, "success", False):
-                    # print(f"Upload result (leader): {resp2.message}")
-                    new_resp = leader_stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_version=0))
-                    new_ver = getattr(new_resp, "server_version", None)
-                    if new_ver is None:
-                        new_ver = 0
-                    with open(ts_file, "w") as f:
-                        f.write(str(new_ver))
-                    return
-            except grpc.RpcError as e:
-                print(f"Upload RPC to hinted leader failed: {e}")
-
-    peers_str = os.environ.get(peers_env_key, "")
-    peers = [p for p in peers_str.split(",") if p]
-    tried = set()
-    for peer in peers:
-        if peer in tried:
-            continue
-        tried.add(peer)
-        # print(f"Trying peer {peer} as potential leader...")
-        peer_stub = _make_stub(peer)
-        if not peer_stub:
-            continue
-        try:
-            resp3 = peer_stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
-        except grpc.RpcError as e:
-            # print(f"Upload RPC to peer {peer} failed: {e}")
-            continue
-
-        if getattr(resp3, "success", False):
-            # print(f"Upload succeeded on peer {peer} (leader).")
-            new_resp = peer_stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_version=0))
-            new_ver = getattr(new_resp, "server_version", None)
-            if new_ver is None:
-                new_ver = 0
-            with open(ts_file, "w") as f:
-                f.write(str(new_ver))
-            return
-        else:
-            if getattr(resp3, "message", "") and "NOT_LEADER" in str(resp3.message):
-                hint = getattr(resp3, "leader_host", None)
-                if hint and hint not in tried:
-                    # print(f"Peer {peer} redirected us to {hint}, trying that next.")
-                    tried.add(hint)
-                    hint_stub = _make_stub(hint)
-                    if hint_stub:
-                        try:
-                            resp4 = hint_stub.UploadFile(file_service_pb2.UploadRequest(filename=filename, data=data))
-                        except grpc.RpcError as e:
-                            print(f"Upload RPC to hinted leader {hint} failed: {e}")
-                            continue
-
-                        if getattr(resp4, "success", False):
-                            # print(f"Upload succeeded on hinted leader {hint}.")
-                            new_resp = hint_stub.TestAuth(file_service_pb2.TestAuthRequest(filename=filename, client_version=0))
-                            new_ver = getattr(new_resp, "server_version", None)
-                            if new_ver is None:
-                                new_ver = 0
-                            with open(ts_file, "w") as f:
-                                f.write(str(new_ver))
-                            return
-    print("Failed to upload file to leader after trying hints and peers.")
+            f.write(str(new_resp.server_version))
+        return True, None
+    if "NOT_LEADER" in resp.message:
+        return False, resp.leader_host or None
+    print(f"Upload rejected: {resp.message}")
+    return False, None
 
 

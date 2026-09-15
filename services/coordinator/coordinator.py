@@ -27,16 +27,8 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
     
     def __init__(self):
         # --- FILESYSTEM STUB SETUP ---
-        filesystem_host = os.getenv("FILE_SERVICE_HOST", "localhost")
-        filesystem_port = os.getenv("FILE_SERVICE_PORT", "50051")
-
-        filesystem_channel = grpc.insecure_channel(
-            f"{filesystem_host}:{filesystem_port}", 
-            options=[
-                ('grpc.max_send_message_length', -1),
-                ('grpc.max_receive_message_length', -1),
-            ])
-        self.filesystem_stub = file_service_pb2_grpc.FileServiceStub(filesystem_channel)
+        # Fails over to the other file servers when the current one is down
+        self.filesystem_stub = client.make_file_service_stub()
 
         # --- DEDUPLICATION STATE ---
         # Initialize in-memory set to track all unique primes found so far.

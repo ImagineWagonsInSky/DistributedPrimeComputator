@@ -104,6 +104,7 @@ message HeartbeatResponse {
 message VoteRequest {
   uint64 term = 1;
   string candidate_id = 2;
+  bool pre_vote = 3; // "would you vote for me?" probe; the voter changes no state
 }
 
 message VoteResponse {

@@ -24,9 +24,6 @@ class Worker():
         coordinator_host = os.getenv("COORDINATOR_HOST", "localhost")
         coordinator_port = os.getenv("COORDINATOR_PORT", "50052")
 
-        file_service_host = os.getenv("FILE_SERVICE_HOST", "localhost")
-        file_service_port = os.getenv("FILE_SERVICE_PORT", "50051")
-
         # Connect to coordinator
         coordinator_channel = grpc.insecure_channel(
             f"{coordinator_host}:{coordinator_port}",
@@ -37,15 +34,8 @@ class Worker():
         )
         self.coordinator_stub = coordinator_pb2_grpc.CoordinatorStub(coordinator_channel)
 
-        # Connect to file service
-        filesystem_channel = grpc.insecure_channel(
-            f"{file_service_host}:{file_service_port}",
-            options=[
-                ("grpc.max_send_message_length", -1),
-                ("grpc.max_receive_message_length", -1),
-            ],
-        )
-        self.filesystem_stub = file_service_pb2_grpc.FileServiceStub(filesystem_channel)
+        # Connect to file service, failing over to the other file servers when the current one is down
+        self.filesystem_stub = client.make_file_service_stub()
 
         self.current_task = None
         self.local_cache_dir = CACHE_DIR

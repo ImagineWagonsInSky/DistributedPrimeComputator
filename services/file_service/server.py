@@ -10,6 +10,20 @@ from .raft import RaftManager
 
 SERVER_ID = os.environ.get(key="SERVER_ID", default="server-1")
 PEERS = [p for p in os.environ.get("PEERS", "").split(",") if p]
+RPC_PORT = os.environ.get("RPC_PORT", "50051")
+# Address other containers can reach this server on; handed to clients as the leader hint
+ADVERTISE_ADDR = os.environ.get("ADVERTISE_ADDR", f"localhost:{RPC_PORT}")
+
+# Reconnect quickly once a peer comes back instead of gRPC's default backoff of up to 2 minutes,
+# and re-resolve DNS promptly since a restarted container may come back on a new IP.
+PEER_CHANNEL_OPTIONS = [
+    ('grpc.max_send_message_length', -1),
+    ('grpc.max_receive_message_length', -1),
+    ('grpc.initial_reconnect_backoff_ms', 500),
+    ('grpc.min_reconnect_backoff_ms', 500),
+    ('grpc.max_reconnect_backoff_ms', 2000),
+    ('grpc.dns_min_time_between_resolutions_ms', 500),
+]
 
 class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
     def __init__(self):
@@ -21,36 +35,66 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
         self.lock = threading.RLock()
 
         self.server_id = SERVER_ID
+        self.advertise_addr = ADVERTISE_ADDR
         self.cluster_size = len(PEERS) + 1
         self.peers = PEERS[:]
+        # One long-lived channel per peer, shared by raft and replication
+        self.peer_stubs = {
+            p: file_service_pb2_grpc.FileServiceStub(grpc.insecure_channel(p, options=PEER_CHANNEL_OPTIONS))
+            for p in self.peers
+        }
 
         self.current_term = self.meta.get("term", 0)
         self.voted_for = self.meta.get("voted_for", None)
 
-        # Added this so file_service_1 starts as leader
-        is_leader_env = os.getenv("IS_LEADER", "false").lower() == "true"
-        if is_leader_env:
-            self.role = "leader"
-        else:
-            self.role = "follower"
-        self.leader_host = os.getenv("LEADER_HOST") or self.meta.get("last_leader", None)
-        self.last_heartbeat = time.time()
+        # Every node starts as a follower and the cluster elects a leader. The last_leader
+        # saved in meta is not trusted: a stale hint just sends clients to a dead server.
+        self.role = "follower"
+        self.leader_host = None
 
-        # check the leader info when server-1 starts as leader by default
-        if self.role == "leader":
-            if not self.leader_host:
-                new_host = os.getenv("RPC_HOST", "0.0.0.0")
-                new_port = os.getenv("RPC_PORT", "50051")
-                self.leader_host = f"{new_host}:{new_port}"
-            self.meta["last_leader"] = self.leader_host
-            self.meta["term"] = self.current_term
-            save_meta(self.meta)
-            print(f"[startup] {self.server_id} starting as pre-designated leader, advertising {self.leader_host}")
-        
         self._cleanup_temp_files()
 
         # Move election and heartbeat behavior into a dedicated manager
         self.raft = RaftManager(self)
+
+    def persist(self):
+        """Save raft state to meta.json. Caller should hold self.lock."""
+        self.meta["term"] = self.current_term
+        self.meta["voted_for"] = self.voted_for
+        self.meta["last_leader"] = self.leader_host
+        save_meta(self.meta)
+
+    def step_down(self, term):
+        """Become a follower, adopting term if it is newer. Caller should hold self.lock."""
+        if term > self.current_term:
+            self.current_term = term
+            self.voted_for = None
+            self.leader_host = None
+            self.persist()
+        self.role = "follower"
+
+    def _call_peers(self, method, request, timeout):
+        """Send the same RPC to every peer in parallel. Returns {peer: response, or None if it failed}."""
+        calls = {peer: getattr(stub, method).future(request, timeout=timeout)
+                 for peer, stub in self.peer_stubs.items()}
+        results = {}
+        for peer, fut in calls.items():
+            try:
+                results[peer] = fut.result()
+            except grpc.RpcError as e:
+                print(f"[{self.server_id}] {method} to {peer} failed: {e.code().name}")
+                results[peer] = None
+        return results
+
+    def _notify_peers(self, method, request, timeout):
+        """Best-effort: send the same RPC to every peer in parallel without waiting for the replies."""
+        def log_failure(fut, peer):
+            if fut.exception() is not None:
+                print(f"[{self.server_id}] {method} to {peer} failed: {fut.code().name}")
+
+        for peer, stub in self.peer_stubs.items():
+            fut = getattr(stub, method).future(request, timeout=timeout)
+            fut.add_done_callback(lambda f, p=peer: log_failure(f, p))
 
 
     def _cleanup_temp_files(self):
@@ -62,42 +106,45 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
 
     def Heartbeat(self, request, context):
         with self.lock:
-            if request.term >= self.current_term:
-                # If heartbeat has equal or higher term, accept it and step down
-                self.role = "follower"
-                # If the heartbeat term is higher, clear any voted_for state from older terms
-                if request.term > self.current_term:
-                    self.voted_for = None
-                self.current_term = request.term
-                self.leader_host = request.leader_id
-                self.last_heartbeat = time.time()
+            # Reject heartbeats from a stale leader; the reply tells it the newer term
+            if request.term < self.current_term:
+                return file_service_pb2.HeartbeatResponse(ok=False, term=self.current_term)
 
-                self.meta["term"] = self.current_term
-                self.meta["last_leader"] = self.leader_host
-                self.meta["voted_for"] = self.voted_for
-                save_meta(self.meta)
-                return file_service_pb2.HeartbeatResponse(ok=True, term=self.current_term)
-            return file_service_pb2.HeartbeatResponse(ok=False, term=self.current_term)
+            # A valid leader exists for this term, so any candidate (or stale leader) steps down
+            if request.term > self.current_term or self.role != "follower":
+                self.step_down(request.term)
+
+            # Only touch the disk when something actually changed
+            if self.leader_host != request.leader_id:
+                self.leader_host = request.leader_id
+                self.persist()
+                print(f"[Follower] {self.server_id} following leader {self.leader_host} (term {self.current_term})")
+
+            self.raft.heard_from_leader()
+            return file_service_pb2.HeartbeatResponse(ok=True, term=self.current_term)
 
     def RequestVote(self, request, context):
         with self.lock:
+            if request.pre_vote:
+                # Answer without changing any state. Refuse while a leader is still heartbeating
+                # us, so a node that only lost contact itself can't start an election.
+                granted = request.term > self.current_term and not self.raft.leader_recently_seen()
+                return file_service_pb2.VoteResponse(vote_granted=granted, term=self.current_term)
+
             # If the request's term is older, deny immediately
             if request.term < self.current_term:
                 return file_service_pb2.VoteResponse(vote_granted=False, term=self.current_term)
 
-            # If the request has a higher term, adopt it and clear any previous vote
+            # A higher term means our term (and any leadership in it) is over
             if request.term > self.current_term:
-                self.current_term = request.term
-                self.voted_for = None
-                self.meta["term"] = self.current_term
-                self.meta["voted_for"] = self.voted_for
-                save_meta(self.meta)
+                self.step_down(request.term)
 
             # Grant vote if we haven't voted yet in this term or we already voted for this candidate
             if self.voted_for in (None, request.candidate_id):
                 self.voted_for = request.candidate_id
-                self.meta["voted_for"] = self.voted_for
-                save_meta(self.meta)
+                self.persist()
+                # Don't start a rival election while this candidate is still counting votes
+                self.raft.reset_election_timer()
                 print(f"[Election] Voted for {request.candidate_id} in term {self.current_term}")
                 return file_service_pb2.VoteResponse(vote_granted=True, term=self.current_term)
 
@@ -154,18 +201,18 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
 
             return file_service_pb2.UploadResponse(success=False, message=f"Local write failed: {e}")
 
-        acks = 1
-        for peer in self.peers:
-                channel = grpc.insecure_channel(peer)
-                stub = file_service_pb2_grpc.FileServiceStub(channel)
-                resp = stub.ReplicateFile(
-                    file_service_pb2.ReplicateRequest(filename=filename, data=data, request_id=request_id), timeout=5)
-                if resp.success:
-                    acks += 1
+        # A dead follower only costs its ack; the upload succeeds as long as a majority stores it
+        replicated = self._call_peers(
+            "ReplicateFile",
+            file_service_pb2.ReplicateRequest(filename=filename, data=data, request_id=request_id),
+            timeout=5)
+        acks = 1 + sum(1 for resp in replicated.values() if resp is not None and resp.success)
+        cleanup_req = file_service_pb2.CleanupTempRequest(filename=filename, request_id=request_id)
 
         majority = (self.cluster_size // 2) + 1
         if acks < majority:
             os.remove(tmp_path)
+            self._notify_peers("CleanupTemp", cleanup_req, timeout=1)
             return file_service_pb2.UploadResponse(
                 success=False,
                 message=f"Failed to replicate {filename} to majority"
@@ -183,20 +230,14 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
                 self.meta["file_versions"][filename] = new_ver
                 save_meta(self.meta)
         except Exception as e:
-            for peer in self.peers:
-                channel = grpc.insecure_channel(peer)
-                stub = file_service_pb2_grpc.FileServiceStub(channel)
-                stub.CleanupTemp(file_service_pb2.CleanupTempRequest(filename=filename, request_id=request_id), timeout=1)
+            self._notify_peers("CleanupTemp", cleanup_req, timeout=1)
             return file_service_pb2.UploadResponse(success=False, message=f"Commit failed locally: {e}")
-    
-        for peer in self.peers:
-            channel = grpc.insecure_channel(peer)
-            stub = file_service_pb2_grpc.FileServiceStub(channel)
-            try:
-                stub.CommitFile(file_service_pb2.CommitRequest(filename=filename, request_id=request_id, version=new_ver), timeout=2)
-            except Exception:
-                # best-effort notify; followers missing the commit will be inconsistent until cleanup or next leader action
-                pass
+
+        # best-effort notify; followers missing the commit will be inconsistent until cleanup or next leader action
+        self._notify_peers(
+            "CommitFile",
+            file_service_pb2.CommitRequest(filename=filename, request_id=request_id, version=new_ver),
+            timeout=2)
 
         return file_service_pb2.UploadResponse(success=True, message="Uploaded and replicated (committed)")
 
@@ -324,10 +365,10 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
                     self.divide_file(f, size)
 
 
-        for peer in self.peers:
-            channel = grpc.insecure_channel(peer)
-            stub = file_service_pb2_grpc.FileServiceStub(channel)
-            stub.ReplicateSubdivisionRequest(subdivision_size=size)
+        self._notify_peers(
+            "ReplicateSubdivisions",
+            file_service_pb2.ReplicateDivision(subdivision_size=size),
+            timeout=10)
 
 
         return file_service_pb2.RequestDivisionResponse(success=True)
@@ -391,15 +432,12 @@ def serve():
     serv = FileServiceServicer()
     file_service_pb2_grpc.add_FileServiceServicer_to_server(serv, server)
 
-    port = int(os.environ.get("RPC_PORT", "50051"))
+    port = int(RPC_PORT)
     server.add_insecure_port(f"0.0.0.0:{port}")
-    print(f"[{SERVER_ID}] server started on port {port}, peers={PEERS}")
+    print(f"[{SERVER_ID}] server started on port {port}, advertising {ADVERTISE_ADDR}, peers={PEERS}")
     server.start()
-    # start election timer after server is listening so RPCs don't race startup
-    threading.Thread(target=serv.raft.election_timer, daemon=True).start()
-    # if this node was pre-designated as leader via environment, start heartbeats now
-    if serv.role == 'leader':
-        threading.Thread(target=serv.raft.send_heartbeats, daemon=True).start()
+    # start raft timers after server is listening so RPCs don't race startup
+    serv.raft.start()
     server.wait_for_termination()
 
 if __name__ == "__main__":
