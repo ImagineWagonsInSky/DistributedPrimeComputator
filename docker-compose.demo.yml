@@ -1,0 +1,28 @@
+# Demo setup: a job that lasts a couple of minutes, three workers, and the live dashboard.
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build
+services:
+  coordinator:
+    environment:
+      - CHUNK_SIZE=50
+
+  worker:
+    deploy:
+      replicas: 3
+    environment:
+      - TASK_DELAY=2
+
+  dashboard:
+    build: .
+    container_name: dashboard
+    command: ["python3", "-m", "services.dashboard.app"]
+    environment:
+      - FILE_SERVICE_PEERS=file_service_1:50051,file_service_2:50054,file_service_3:50053,file_service_4:50055
+      - COORDINATOR_ADDR=coordinator:50052
+    volumes:
+      # Lets the dashboard kill/freeze/revive containers. This is root-equivalent access to the
+      # host, which is why the port below is only bound to localhost.
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - dist_net
