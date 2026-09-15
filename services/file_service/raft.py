@@ -32,7 +32,7 @@ class RaftManager:
         self._inflight = set()
         self._inflight_lock = threading.Lock()
         # peers whose last heartbeat failed, only used to avoid logging every second
-        self._unreachable = set()
+        self.unreachable = set()
         # followers currently being brought up to date
         self._syncing = set()
 
@@ -191,13 +191,13 @@ class RaftManager:
         try:
             resp = fut.result()
         except grpc.RpcError as e:
-            if peer not in self._unreachable:
-                self._unreachable.add(peer)
+            if peer not in self.unreachable:
+                self.unreachable.add(peer)
                 print(f"[Leader:{self.serv.server_id}] heartbeat to {peer} failed: {e.code().name}")
             return
 
-        if peer in self._unreachable:
-            self._unreachable.discard(peer)
+        if peer in self.unreachable:
+            self.unreachable.discard(peer)
             print(f"[Leader:{self.serv.server_id}] {peer} is reachable again")
 
         # The heartbeat carried our commit point, so a follower reporting anything else is missing uploads

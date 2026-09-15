@@ -415,6 +415,26 @@ class FileServiceServicer(file_service_pb2_grpc.FileServiceServicer):
 
         return file_service_pb2.CleanupTempResponse(ok=True, message="cleaned")
 
+    def GetStatus(self, request, context):
+        with self.lock:
+            now = time.monotonic()
+            contact = self.raft.last_leader_contact
+            is_leader = self.role == "leader"
+            return file_service_pb2.ServerStatus(
+                server_id=self.server_id,
+                advertise_addr=self.advertise_addr,
+                role=self.role,
+                term=self.current_term,
+                leader=self.leader_host or "",
+                voted_for=self.voted_for or "",
+                commit_index=self.commit_index,
+                commit_term=self.commit_term,
+                caught_up=is_leader or self.caught_up,
+                ms_since_leader_contact=-1 if contact == float("-inf") else int((now - contact) * 1000),
+                ms_until_election=-1 if is_leader else max(0, int((self.raft.election_deadline - now) * 1000)),
+                unreachable_peers=sorted(self.raft.unreachable) if is_leader else [],
+            )
+
     def GetFileVersions(self, request, context):
         with self.lock:
             return file_service_pb2.FileVersionsResponse(

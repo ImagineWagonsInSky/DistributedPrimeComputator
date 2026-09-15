@@ -38,6 +38,46 @@ each connecting to the same coordinator and file service.
 
 ---
 
+### 3. Live demo dashboard
+
+To show the system to other people, start it with the demo settings:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.demo.yml up --build
+```
+
+Then open http://localhost:8080. The demo settings make the job last a couple of minutes
+(small tasks, a 2 second delay per task, three workers) so there is time to break things.
+
+The page shows the Raft cluster (leader, followers, each follower's election countdown, heartbeats
+travelling from the leader), the coordinator's progress, each worker's current task, and a live
+feed of elections, failovers and syncs taken from the containers' logs.
+
+Every service has three buttons:
+
+* **Kill**: SIGKILL the container, like a crash.
+* **Freeze**: pause it. It stays up but stops responding, like a hung process.
+* **Revive**: start or unpause it again.
+
+**New job** queues the whole job again and restarts the workers.
+
+Things to try:
+
+1. **Kill the leader.** The followers' countdowns run out, one wins a new election, and the
+   coordinator and workers switch to a live file server.
+2. **Freeze a follower.** The leader can't reach it, but nobody starts an election.
+3. **Kill a follower while the job runs, then revive it.** It comes back behind the leader and
+   is synced up to date.
+4. **Kill the coordinator, then revive it.** Workers wait and retry; the coordinator restores its
+   last snapshot and carries on.
+5. **Kill a worker.** After 15 seconds without heartbeats the coordinator hands its task to
+   another worker.
+
+The dashboard mounts the Docker socket so it can control containers. That is root-equivalent
+access to the host, so it only listens on localhost.
+
+---
+
 ## Environment Configuration
 
 The containers communicate via a shared Docker network.

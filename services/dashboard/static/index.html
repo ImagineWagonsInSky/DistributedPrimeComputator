@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prime Cluster Live</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --line: #dfe3ea;
+    --leader: #d49500; --follower: #5d6d88; --candidate: #e0661b; --down: #c83c3c; --frozen: #3b82c4;
+    --ok: #2f9e5b; --you: #7a4fd6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #11151c; --panel: #1a2029; --text: #e6e9ef; --muted: #8b93a5; --line: #2b3342; --follower: #8a9ab5; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 17px; margin: 0 auto 0 0; }
+  .pill { padding: 3px 10px; border-radius: 99px; background: var(--bg); border: 1px solid var(--line); font-size: 13px; }
+  .pill.bad { color: var(--down); border-color: var(--down); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 16px; padding: 16px 20px; }
+  @media (max-width: 1100px) { main { grid-template-columns: minmax(0, 1fr); } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 16px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 0 0 10px; }
+  .cluster { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 760px) { .cluster { grid-template-columns: minmax(0, 1fr); } }
+  #ring { width: 100%; max-width: 300px; height: auto; display: block; margin: 0 auto; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: center; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+  .card { border: 1px solid var(--line); border-left: 4px solid var(--follower); border-radius: 8px; padding: 10px; }
+  .card.leader { border-left-color: var(--leader); }
+  .card.candidate { border-left-color: var(--candidate); }
+  .card.exited, .card.missing { border-left-color: var(--down); opacity: .65; }
+  .card.paused { border-left-color: var(--frozen); }
+  .card.unresponsive { border-left-style: dashed; }
+  .title { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 600; }
+  .badge { font-size: 11px; font-weight: 500; padding: 1px 8px; border-radius: 99px; background: var(--bg); border: 1px solid var(--line); white-space: nowrap; }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
+  .meta b { color: var(--text); font-weight: 500; }
+  .bar { height: 6px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin-top: 6px; }
+  .bar > div { height: 100%; background: var(--follower); }
+  .bar.warn > div { background: var(--candidate); }
+  .bar.progress > div { background: var(--ok); }
+  .buttons { display: flex; gap: 6px; margin-top: 9px; }
+  button { font: inherit; font-size: 12px; padding: 3px 11px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
+  button:disabled { opacity: .35; cursor: default; }
+  button.kill:enabled:hover { border-color: var(--down); color: var(--down); }
+  button.freeze:enabled:hover { border-color: var(--frozen); color: var(--frozen); }
+  button.revive:enabled:hover, button.primary:hover { border-color: var(--ok); color: var(--ok); }
+  #events { list-style: none; margin: 0; padding: 0; max-height: calc(100vh - 150px); overflow-y: auto; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #events li { display: grid; grid-template-columns: 58px 100px minmax(0, 1fr); gap: 6px; padding: 3px 0; border-bottom: 1px solid var(--line); }
+  #events .time { color: var(--muted); }
+  #events .source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #events .text { overflow-wrap: anywhere; }
+  #events li.win .text { color: var(--leader); font-weight: 600; }
+  #events li.election .text { color: var(--candidate); }
+  #events li.warn .text { color: var(--down); }
+  #events li.sync .text { color: var(--ok); }
+  #events li.you { background: color-mix(in srgb, var(--you) 12%, transparent); }
+  #events li.you .source { color: var(--you); font-weight: 600; }
+  /* ring */
+  .edge { stroke: var(--line); stroke-width: 2; }
+  .edge.broken { stroke: var(--down); stroke-dasharray: 5 5; }
+  .node circle.body { stroke: var(--panel); stroke-width: 3; }
+  .node text { fill: #fff; font-size: 13px; font-weight: 600; text-anchor: middle; }
+  .node text.under { fill: var(--muted); font-size: 11px; font-weight: 500; }
+  .timer { fill: none; stroke-width: 4; stroke-linecap: round; transform-box: fill-box; transform-origin: center; transform: rotate(-90deg); }
+  .pulse { fill: var(--leader); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Distributed Prime Computator: live cluster</h1>
+  <span class="pill" id="term">term –</span>
+  <span class="pill" id="leader">leader –</span>
+  <button class="primary" onclick="newJob()">New job</button>
+</header>
+<main>
+  <div>
+    <section>
+      <h2>File servers (Raft cluster)</h2>
+      <div class="cluster">
+        <div>
+          <svg id="ring" viewBox="0 0 300 320">
+            <g id="edges"></g><g id="pulses"></g><g id="nodes"></g>
+          </svg>
+          <div class="legend">
+            <span><i style="background:var(--leader)"></i>leader</span>
+            <span><i style="background:var(--follower)"></i>follower</span>
+            <span><i style="background:var(--candidate)"></i>candidate</span>
+            <span><i style="background:var(--frozen)"></i>frozen</span>
+            <span><i style="background:var(--down)"></i>down</span>
+          </div>
+          <div class="legend">ring around a follower = time left before it starts an election</div>
+        </div>
+        <div class="cards" id="servers"></div>
+      </div>
+    </section>
+    <section>
+      <h2>Job</h2>
+      <div class="cards" id="job"></div>
+    </section>
+  </div>
+  <section>
+    <h2>Events</h2>
+    <ul id="events"></ul>
+  </section>
+</main>
+
+<script>
+  const ELECTION_TIMEOUT_MAX_MS = 7000;  // upper bound of ELECTION_TIMEOUT in raft.py
+  const WORKER_TIMEOUT_MS = 15000;       // HEARTBEAT_TIMEOUT in coordinator.py
+  const COLORS = { leader: "var(--leader)", follower: "var(--follower)", candidate: "var(--candidate)",
+                   paused: "var(--frozen)", exited: "var(--down)", missing: "var(--down)", unresponsive: "var(--muted)" };
+
+  let lastEventId = 0;
+  const lastContact = {};  // server -> previous ms_since_leader_contact, to spot each new heartbeat
+
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const serverLabel = name => name.replace("file_service_", "server-");
+  const hostOf = addr => (addr || "").split(":")[0];
+
+  // Only touch the DOM when content changed, so buttons aren't replaced under the mouse
+  function setHTML(el, html) {
+    if (el.innerHTML !== html) el.innerHTML = html;
+  }
+
+  // What to call a service right now: its Raft role if it answers, otherwise its container state
+  function condition(item) {
+    if (item.state !== "running") return item.state;
+    if (!item.status) return "unresponsive";
+    return item.status.role || "running";
+  }
+
+  function buttonsHtml(name, state) {
+    const up = state === "running";
+    return `<button class="kill" ${up || state === "paused" ? "" : "disabled"} onclick="act('${name}', 'kill')">Kill</button>
+            <button class="freeze" ${up ? "" : "disabled"} onclick="act('${name}', 'freeze')">Freeze</button>
+            <button class="revive" ${up ? "disabled" : ""} onclick="act('${name}', 'revive')">Revive</button>`;
+  }
+
+  // Cards keep their buttons unless the container state changes; only the body re-renders
+  function upsertCard(container, name, cls, bodyHtml, withButtons, state) {
+    let card = container.querySelector(`[data-name="${name}"]`);
+    if (!card) {
+      card = document.createElement("div");
+      card.dataset.name = name;
+      card.innerHTML = `<div class="body"></div><div class="buttons"></div>`;
+      container.appendChild(card);
+    }
+    card.className = `card ${cls}`;
+    setHTML(card.querySelector(".body"), bodyHtml);
+    setHTML(card.querySelector(".buttons"), withButtons ? buttonsHtml(name, state) : "");
+  }
+
+  function bar(fraction, cls = "") {
+    const pct = Math.max(0, Math.min(1, fraction)) * 100;
+    return `<div class="bar ${cls}"><div style="width:${pct.toFixed(1)}%"></div></div>`;
+  }
+
+  // --- file servers ---
+
+  function ringPositions(n) {
+    return Array.from({ length: n }, (_, i) => {
+      const angle = -Math.PI / 2 + (2 * Math.PI * i) / n;
+      // leaves room under the bottom node for its label
+      return { x: 150 + 100 * Math.cos(angle), y: 150 + 100 * Math.sin(angle) };
+    });
+  }
+
+  function renderServers(servers) {
+    const pos = ringPositions(servers.length);
+    const leaderIdx = servers.findIndex(s => s.status && s.status.role === "leader" && s.state === "running");
+    const leader = servers[leaderIdx];
+    const unreachable = new Set((leader?.status?.unreachable_peers || []).map(hostOf));
+
+    // Edges from the leader to every other server; dashed red when the leader can't reach it
+    let edges = "";
+    if (leader) {
+      servers.forEach((s, i) => {
+        if (i === leaderIdx) return;
+        const broken = unreachable.has(s.name) || condition(s) !== "follower";
+        edges += `<line class="edge ${broken ? "broken" : ""}" x1="${pos[leaderIdx].x}" y1="${pos[leaderIdx].y}" x2="${pos[i].x}" y2="${pos[i].y}"/>`;
+      });
+    }
+    setHTML(document.getElementById("edges"), edges);
+
+    let nodes = "";
+    servers.forEach((s, i) => {
+      const cond = condition(s), { x, y } = pos[i];
+      let timer = "";
+      if (s.status && s.status.ms_until_election >= 0 && s.state === "running") {
+        const frac = Math.min(1, s.status.ms_until_election / ELECTION_TIMEOUT_MAX_MS), c = 2 * Math.PI * 37;
+        const colour = s.status.ms_until_election < 1000 ? "var(--candidate)" : "var(--follower)";
+        timer = `<circle class="timer" cx="${x}" cy="${y}" r="37" stroke="${colour}"
+                   stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${(c * (1 - frac)).toFixed(1)}"/>`;
+      }
+      nodes += `<g class="node">${timer}
+        <circle class="body" cx="${x}" cy="${y}" r="30" fill="${COLORS[cond] || COLORS.follower}"/>
+        <text x="${x}" y="${y + 5}">${cond === "leader" ? "👑" : esc(serverLabel(s.name).slice(-1))}</text>
+        <text class="under" x="${x}" y="${y + 52}">${esc(serverLabel(s.name))} · ${esc(cond)}</text></g>`;
+
+      // A drop in "ms since leader contact" means a heartbeat just arrived: animate it
+      const contact = s.status ? s.status.ms_since_leader_contact : -1;
+      if (leader && i !== leaderIdx && contact >= 0 && lastContact[s.name] !== undefined && contact < lastContact[s.name]) {
+        pulse(pos[leaderIdx], pos[i]);
+      }
+      lastContact[s.name] = contact;
+    });
+    setHTML(document.getElementById("nodes"), nodes);
+
+    const terms = servers.filter(s => s.status).map(s => s.status.term);
+    document.getElementById("term").textContent = `term ${terms.length ? Math.max(...terms) : "–"}`;
+    const leaderPill = document.getElementById("leader");
+    leaderPill.textContent = leader ? `leader ${serverLabel(leader.name)}` : "no leader";
+    leaderPill.classList.toggle("bad", !leader);
+
+    const container = document.getElementById("servers");
+    for (const s of servers) {
+      const st = s.status, cond = condition(s);
+      let body = `<div class="title">${esc(serverLabel(s.name))}<span class="badge">${esc(cond)}</span></div>`;
+      if (st) {
+        body += `<div class="meta">term <b>${st.term}</b> · commit <b>#${st.commit_index}</b> ${st.caught_up ? "✓ up to date" : "⚠ catching up"}</div>`;
+        if (st.role === "leader") {
+          body += `<div class="meta">${st.unreachable_peers.length ? "can't reach " + esc(st.unreachable_peers.map(hostOf).map(serverLabel).join(", ")) : "reaching all followers"}</div>`;
+        } else {
+          body += `<div class="meta">leader <b>${esc(st.leader ? serverLabel(hostOf(st.leader)) : "unknown")}</b>${st.voted_for ? " · voted " + esc(st.voted_for) : ""}</div>`;
+          body += `<div class="meta">election in <b>${(st.ms_until_election / 1000).toFixed(1)}s</b></div>`;
+          body += bar(st.ms_until_election / ELECTION_TIMEOUT_MAX_MS, st.ms_until_election < 1000 ? "warn" : "");
+        }
+      } else {
+        body += `<div class="meta">${s.state === "paused" ? "frozen: running but not responding" : s.state === "running" ? "not responding (starting?)" : "container stopped"}</div>`;
+      }
+      upsertCard(container, s.name, cond, body, true, s.state);
+    }
+  }
+
+  function pulse(from, to) {
+    const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    dot.setAttribute("r", "5");
+    dot.setAttribute("class", "pulse");
+    document.getElementById("pulses").appendChild(dot);
+    dot.animate([{ transform: `translate(${from.x}px, ${from.y}px)` }, { transform: `translate(${to.x}px, ${to.y}px)` }],
+                { duration: 500, easing: "ease-in" }).onfinish = () => dot.remove();
+  }
+
+  // --- coordinator and workers ---
+
+  function renderJob(coordinator, workers) {
+    const container = document.getElementById("job");
+    const st = coordinator.status, cond = condition(coordinator);
+    let body = `<div class="title">coordinator<span class="badge">${esc(cond === "running" ? "up" : cond)}</span></div>`;
+    if (st) {
+      const total = st.tasks_queued + st.tasks_in_progress + st.tasks_done;
+      body += `<div class="meta"><b>${st.tasks_done}</b>/${total} tasks done · <b>${st.tasks_in_progress}</b> running · <b>${st.primes_found}</b> primes</div>`;
+      body += bar(total ? st.tasks_done / total : 0, "progress");
+      body += `<div class="meta">reads from <b>${esc(serverLabel(hostOf(st.file_server)))}</b></div>`;
+    } else {
+      body += `<div class="meta">${coordinator.state === "running" ? "not responding (waiting for a leader?)" : "container " + esc(coordinator.state)}</div>`;
+    }
+    upsertCard(container, coordinator.name, cond === "running" ? "follower" : cond, body, true, coordinator.state);
+
+    const names = new Set([coordinator.name]);
+    for (const w of workers) {
+      names.add(w.name);
+      const ws = w.status;
+      let body = `<div class="title">${esc(w.label)}<span class="badge">${esc(w.state === "running" ? (ws && ws.task_id ? "working" : "idle") : w.state)}</span></div>`;
+      if (ws) {
+        body += `<div class="meta">task <b>${esc(ws.task_id || "–")}</b> · heartbeat ${(ws.ms_since_heartbeat / 1000).toFixed(1)}s ago</div>`;
+        body += bar(ws.ms_since_heartbeat / WORKER_TIMEOUT_MS, ws.ms_since_heartbeat > 7000 ? "warn" : "");
+      } else {
+        body += `<div class="meta">${w.state === "exited" ? "container stopped (job done or killed)" : "not known to the coordinator"}</div>`;
+      }
+      upsertCard(container, w.name, w.state === "running" ? "follower" : w.state, body, true, w.state);
+    }
+    container.querySelectorAll(".card").forEach(c => names.has(c.dataset.name) || c.remove());
+  }
+
+  // --- events ---
+
+  function eventClass(e) {
+    if (e.source === "you") return "you";
+    if (e.text.includes("WON")) return "win";
+    if (/starting election|PreVote|stepping down|lost election/.test(e.text)) return "election";
+    if (/failed|Haven't received|unreachable|behind/.test(e.text)) return "warn";
+    if (/synced|syncing|up to date|reachable again/.test(e.text)) return "sync";
+    return "";
+  }
+
+  function addEvents(events) {
+    const list = document.getElementById("events");
+    for (const e of events) {
+      const li = document.createElement("li");
+      li.className = eventClass(e);
+      const cells = [new Date(e.time * 1000).toLocaleTimeString([], { hour12: false }), serverLabel(e.source), e.text];
+      ["time", "source", "text"].forEach((cls, i) => {
+        const span = document.createElement("span");
+        span.className = cls;
+        span.textContent = cells[i];
+        li.appendChild(span);
+      });
+      list.prepend(li);
+      lastEventId = e.id;
+    }
+    while (list.children.length > 300) list.lastChild.remove();
+  }
+
+  // --- polling and actions ---
+
+  async function refreshState() {
+    try {
+      const state = await (await fetch("/api/state")).json();
+      renderServers(state.file_servers);
+      renderJob(state.coordinator, state.workers);
+    } catch (e) { /* dashboard restarting; try again next tick */ }
+  }
+
+  async function refreshEvents() {
+    try {
+      addEvents(await (await fetch(`/api/events?after=${lastEventId}`)).json());
+    } catch (e) { /* try again next tick */ }
+  }
+
+  // Failed actions show up in the feed rather than as a pop-up in the middle of a demo
+  function showError(text) {
+    const li = document.createElement("li");
+    li.className = "warn";
+    ["time", "source", "text"].forEach((cls, i) => {
+      const span = document.createElement("span");
+      span.className = cls;
+      span.textContent = [new Date().toLocaleTimeString([], { hour12: false }), "dashboard", text][i];
+      li.appendChild(span);
+    });
+    document.getElementById("events").prepend(li);
+  }
+
+  async function post(url) {
+    try {
+      const r = await fetch(url, { method: "POST" });
+      if (!r.ok) showError(`${url} failed: ${(await r.json().catch(() => ({}))).error || r.statusText}`);
+    } catch (e) {
+      showError(`${url} failed: dashboard unreachable`);
+    }
+    refreshState();
+    refreshEvents();
+  }
+  const act = (name, action) => post(`/api/containers/${name}/${action}`);
+  const newJob = () => post("/api/job/reset");
+
+  setInterval(refreshState, 250);
+  setInterval(refreshEvents, 500);
+  refreshState();
+  refreshEvents();
+</script>
+</body>
+</html>
