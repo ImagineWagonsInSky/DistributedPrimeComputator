@@ -6,6 +6,7 @@ import time
 import argparse
 import os
 import pickle
+import socket
 import uuid
 import threading
 from services.file_service import client
@@ -16,6 +17,9 @@ args = parser.parse_args()
 
 CACHE_DIR = args.cache_dir
 os.makedirs(CACHE_DIR, exist_ok=True)
+
+# Demo only: extra seconds each task takes, so the job lasts long enough to watch
+TASK_DELAY = float(os.getenv("TASK_DELAY", "0"))
 
 class Worker():
     def __init__(self):
@@ -41,7 +45,8 @@ class Worker():
         self.local_cache_dir = CACHE_DIR
 
         # --- SCHEDULING AND SNAPSHOT --- 
-        self.worker_id = str(uuid.uuid4())
+        # Prefixed with the container hostname so the demo dashboard can match workers to containers
+        self.worker_id = f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
         self.last_snapshot_id = None
         print(f"Worker starting up with ID: {self.worker_id}")
 
@@ -71,6 +76,7 @@ class Worker():
                 print(f"I have received a TASK with task_id: {self.current_task.task_id}")
 
                 prime_batch = self._process_task(self.current_task)
+                time.sleep(TASK_DELAY)
 
                 submit_req = coordinator_pb2.SubmitBatchRequest(
                     primes=prime_batch,
@@ -98,13 +104,15 @@ class Worker():
             time.sleep(5.0)
 
     def _send_heartbeats(self):
-        try:
-            response_iterator = self.coordinator_stub.Heartbeat(self._heartbeat_generator())
-
-            for response in response_iterator:
-                pass        
-        except Exception as e:
-            print(f"Heartbeat stream failed: {e}")
+        # Reconnect whenever the stream drops, e.g. while the coordinator starts up or restarts;
+        # otherwise the coordinator never hears from us again and can't detect our failure
+        while True:
+            try:
+                for _ in self.coordinator_stub.Heartbeat(self._heartbeat_generator()):
+                    pass
+            except grpc.RpcError as e:
+                print(f"Heartbeat stream failed ({e.code().name}), reconnecting in 2s")
+            time.sleep(2.0)
         
     def _process_task(self, task):
         """

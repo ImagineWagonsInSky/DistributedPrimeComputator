@@ -37,6 +37,10 @@ class FailoverStub:
         self._lock = threading.Lock()
         self._rpc_timeout = rpc_timeout
 
+    @property
+    def current_addr(self):
+        return self._addrs[self._current]
+
     def __getattr__(self, method):
         def call(request, timeout=None, **kwargs):
             last_err = None

@@ -23,7 +23,8 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
     OUTPUT_PATH = os.path.join(CACHE_DIR, "primes.txt")
     SNAPSHOT_PATH = os.path.join(CACHE_DIR, "snapshot.pkl")
-    CHUNK_SIZE = 10000
+    # Lines per task; the demo uses small chunks so the job lasts long enough to watch
+    CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "10000"))
     
     def __init__(self):
         # --- FILESYSTEM STUB SETUP ---
@@ -42,6 +43,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         self.worker_affinity = {}
         self.tasks_in_progress = {}
         self.active_workers = set()
+        self.total_tasks = 0
         self.task_queues_lock = threading.Lock()
 
         self.local_cache_dir = CACHE_DIR
@@ -82,14 +84,26 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
         task_counter = 0
         
         for f in filename_list.files:
-            if not f.filename == "primes.txt":
+            # Only input datasets are work; primes.txt and snapshot.pkl live alongside them
+            if f.filename.startswith("input"):
+                num_lines = self._count_lines(f.filename)
                 self.task_queues[f.filename] = []
 
-                for i in range(ceil(f.size / self.CHUNK_SIZE)):
+                for i in range(ceil(num_lines / self.CHUNK_SIZE)):
                     task_id = f"task_{task_counter}"
                     task_counter += 1
                     task = (task_id, f.filename, i * self.CHUNK_SIZE, self.CHUNK_SIZE)
                     self.task_queues[f.filename].append(task)
+        self.total_tasks = task_counter
+
+    def _count_lines(self, filename):
+        """Tasks are ranges of lines, so size them by line count rather than bytes."""
+        local_path, _ = client.open_or_validate(self.filesystem_stub, os.path.join(CACHE_DIR, filename))
+        if local_path is None:
+            print(f"Could not fetch {filename}; skipping it")
+            return 0
+        with open(local_path, "rb") as f:
+            return sum(1 for _ in f)
 
     def GetWork(self, request, context):
         """
@@ -216,7 +230,8 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
                         "task_queues": self.task_queues,
                         "worker_affinity": self.worker_affinity,
                         "tasks_in_progress": self.tasks_in_progress,
-                        "found_primes": self.found_primes
+                        "found_primes": self.found_primes,
+                        "total_tasks": self.total_tasks
                     }
         
             self.pending_snapshot = {
@@ -298,6 +313,7 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
                 self.worker_affinity = coordinator_state["worker_affinity"]
                 self.tasks_in_progress = coordinator_state["tasks_in_progress"]
                 self.found_primes = coordinator_state["found_primes"]
+                self.total_tasks = coordinator_state.get("total_tasks", 0)
             
             # Rebuild primes.txt from found_primes
             try:
@@ -355,6 +371,38 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
                 return True
         return False
     
+    def GetStatus(self, request, context):
+        """Live view of the job for the demo dashboard."""
+        now = time.time()
+        with self.task_queues_lock:
+            queued = sum(len(q) for q in self.task_queues.values())
+            running = len(self.tasks_in_progress)
+            task_of = {wid: task_id for task_id, (_, wid) in self.tasks_in_progress.items()}
+            workers = [coordinator_pb2.WorkerStatus(worker_id=wid, ms_since_heartbeat=int((now - hb) * 1000),
+                                                    task_id=task_of.get(wid, ""))
+                       for wid, hb in self.last_heartbeat.items()]
+            total = self.total_tasks
+        return coordinator_pb2.CoordinatorStatus(
+            tasks_queued=queued,
+            tasks_in_progress=running,
+            tasks_done=max(0, total - queued - running),
+            # read without primes_lock, which is held for whole uploads (seconds during an election)
+            primes_found=len(self.found_primes),
+            workers=workers,
+            file_server=self.filesystem_stub.current_addr,
+        )
+
+    def ResetJob(self, request, context):
+        """Throw away all progress and queue the whole job again (used by the demo dashboard)."""
+        with self.task_queues_lock, self.primes_lock:
+            self._populate_queues()
+            self.tasks_in_progress = {}
+            self.found_primes = set()
+            open(self.OUTPUT_PATH, "w").close()
+            client.close_file(self.filesystem_stub, self.OUTPUT_PATH)
+        print("JOB RESET: all tasks queued again")
+        return google.protobuf.empty_pb2.Empty()
+
     def Heartbeat(self, request_iterator, context):
         worker_id = None
         try:
@@ -399,8 +447,8 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
                     if wid == assigned_wid:
                         task_to_requeue = (task_id, task)
                 if task_to_requeue:
-                    filename = task_to_requeue[1]
-                    # TODO: WILL PROB BREAK
+                    task = task_to_requeue[1]
+                    filename = task[1]
                     print(f"BEFORE being added back to taskqueue {self.task_queues.get(filename, [])}")
                     task_queue = self.task_queues.get(filename, [])
                     task_queue.append(task)
@@ -409,7 +457,8 @@ class CoordinatorServicer(coordinator_pb2_grpc.CoordinatorServicer):
                     # Clean up scheduling data structures
                     del self.tasks_in_progress[task_to_requeue[0]]
                 self.active_workers.remove(wid)
-                del self.worker_affinity[wid]
+                # a worker that never got a task has no affinity
+                self.worker_affinity.pop(wid, None)
                 del self.last_heartbeat[wid]
 
     def _start_heartbeat_monitor(self):

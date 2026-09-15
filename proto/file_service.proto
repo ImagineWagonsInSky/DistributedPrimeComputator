@@ -25,6 +25,9 @@ service FileService {
   rpc InstallFile(InstallFileRequest) returns (InstallFileResponse);
   rpc FinishSync(FinishSyncRequest) returns (FinishSyncResponse);
 
+  // Live internal state, for the demo dashboard
+  rpc GetStatus(StatusRequest) returns (ServerStatus);
+
   //Subdivision files creation and replication
   rpc RequestSubdivisions(RequestDivision) returns (RequestDivisionResponse);
   rpc ReplicateSubdivisions(ReplicateDivision) returns (ReplicateDivisionResponse);
@@ -208,4 +211,21 @@ message FinishSyncRequest {
 message FinishSyncResponse {
   bool success = 1;
   uint64 term = 2;
+}
+
+message StatusRequest {}
+
+message ServerStatus {
+  string server_id = 1;
+  string advertise_addr = 2;
+  string role = 3;
+  uint64 term = 4;
+  string leader = 5;
+  string voted_for = 6;
+  uint64 commit_index = 7;
+  uint64 commit_term = 8;
+  bool caught_up = 9;
+  int64 ms_since_leader_contact = 10; // -1 if never heard from a leader
+  int64 ms_until_election = 11;       // -1 on the leader
+  repeated string unreachable_peers = 12; // leader only
 }
